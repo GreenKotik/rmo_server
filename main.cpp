@@ -6,12 +6,12 @@
 #include <QJsonObject>
 #include <QCoreApplication>
 #include <QDebug>
-#include "devicedata.h"  // ✅ Для IDeviceData
-#include <memory>        // ✅ Для std::shared_ptr
-
+#include "devicedata.h"
+#include <memory>
 
 int main(int argc, char *argv[])
 {
+    qDebug() << "[Main] Запуск приложения...";
     QCoreApplication::setAttribute(Qt::AA_DisableWindowContextHelpButton);
     QApplication a(argc, argv);
 
@@ -47,7 +47,6 @@ int main(int argc, char *argv[])
     if (modeStr.isEmpty()) {
         modeStr = appConfig.value("mode").toString("server");
     }
-
     AppMode mode = (modeStr == "client") ? AppMode::Client : AppMode::Server;
 
     // ✅ Формируем конфиг клиента
@@ -62,5 +61,14 @@ int main(int argc, char *argv[])
 
     MainWindow w(mode, clientConfig);
     w.show();
-    return a.exec();
+
+    qDebug() << "[Main] MainWindow создан и показан";
+    qDebug() << "[Main] Запуск event loop...";
+
+    int result = a.exec();
+
+    qDebug() << "[Main] Event loop завершён с кодом:" << result;
+    qDebug() << "[Main] Начинается уничтожение объектов...";
+
+    return result;
 }

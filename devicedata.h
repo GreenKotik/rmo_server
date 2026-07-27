@@ -55,6 +55,9 @@ struct IDeviceData {
 
     // ✅ Сериализация в JSON (для записи в БД и отправки клиентам)
     virtual QJsonObject toJson() const = 0;
+    // ✅ НОВЫЙ ВИРТУАЛЬНЫЙ МЕТОД: Установить ошибку "Нет связи" (код 250)
+    // Базовая реализация — пустая. Наследники могут переопределить.
+    virtual void setConnectionError() {}
 };
 
 // ============================================================================
@@ -87,6 +90,9 @@ struct PeredatchikData : public IDeviceData {
     int deviceId() const override { return m_deviceId; }
     bool hasErrors() const override { return errors.count > 0; }
     DeviceErrors getErrors() const override { return errors; }
+    void setConnectionError() override {
+        errors.addCode(250);
+    }
 
     QJsonObject toJson() const override {
         QJsonObject obj;
@@ -120,8 +126,11 @@ struct TemperaturaData : public IDeviceData {
     int deviceId() const override { return m_deviceId; }
     bool hasErrors() const override { return errors.count > 0; }
     DeviceErrors getErrors() const override { return errors; }
+    void setConnectionError() override {
+        errors.addCode(250);
+    }
 
-    QJsonObject toJson() const override {
+   QJsonObject toJson() const override {
         QJsonObject obj;
         obj["deviceId"] = m_deviceId;
         obj["temperature"] = dTemperatura;
@@ -148,6 +157,9 @@ struct DegidratorData : public IDeviceData {
     int deviceId() const override { return m_deviceId; }
     bool hasErrors() const override { return errors.count > 0; }
     DeviceErrors getErrors() const override { return errors; }
+    void setConnectionError() override {
+        errors.addCode(250);
+    }
 
     QJsonObject toJson() const override {
         QJsonObject obj;
@@ -183,6 +195,9 @@ struct UPData : public IDeviceData {
     int deviceId() const override { return m_deviceId; }
     bool hasErrors() const override { return errors.count > 0; }
     DeviceErrors getErrors() const override { return errors; }
+    void setConnectionError() override {
+        errors.addCode(250);
+    }
 
     QJsonObject toJson() const override {
         QJsonObject obj;
@@ -199,6 +214,69 @@ struct UPData : public IDeviceData {
         for (int code : errors.codes) errArray.append(code);
         obj["errors"] = errArray;
 
+        return obj;
+    }
+};
+
+// --- Данные датчика температуры Boreas 3 (4 датчика + 4 статуса) ---
+struct Boreas3Data : public IDeviceData {
+    int m_deviceId;
+    double temperatures[4] = {0.0, 0.0, 0.0, 0.0};
+    int alarms[4] = {0, 0, 0, 0};
+    DeviceErrors errors;
+
+    Boreas3Data(int deviceId) : m_deviceId(deviceId) {}
+
+    int deviceId() const override { return m_deviceId; }
+    bool hasErrors() const override { return errors.count > 0; }
+    DeviceErrors getErrors() const override { return errors; }
+
+    void setConnectionError() override {
+        errors.addCode(250);
+    }
+    QJsonObject toJson() const override {
+        QJsonObject obj;
+        obj["deviceId"] = m_deviceId;
+        QJsonArray tempArray;
+        for (int i = 0; i < 4; ++i) tempArray.append(temperatures[i]);
+        obj["temperatures"] = tempArray;
+        QJsonArray alarmArray;
+        for (int i = 0; i < 4; ++i) alarmArray.append(alarms[i]);
+        obj["alarms"] = alarmArray;
+        QJsonArray errArray;
+        for (int code : errors.codes) errArray.append(code);
+        obj["errors"] = errArray;
+        return obj;
+    }
+};
+
+// --- Данные датчика температуры TE Monitor V6 (8 датчиков + битовая маска аварий) ---
+struct TEMonitorV6Data : public IDeviceData {
+    int m_deviceId;
+    double temperatures[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    int alarmStatus = 0;  // Битовая маска: бит i = датчик i+1
+    DeviceErrors errors;
+
+    TEMonitorV6Data(int deviceId) : m_deviceId(deviceId) {}
+
+    int deviceId() const override { return m_deviceId; }
+    bool hasErrors() const override { return errors.count > 0; }
+    DeviceErrors getErrors() const override { return errors; }
+
+    void setConnectionError() override {
+        errors.addCode(250);
+    }
+
+    QJsonObject toJson() const override {
+        QJsonObject obj;
+        obj["deviceId"] = m_deviceId;
+        QJsonArray tempArray;
+        for (int i = 0; i < 8; ++i) tempArray.append(temperatures[i]);
+        obj["temperatures"] = tempArray;
+        obj["alarmStatus"] = alarmStatus;
+        QJsonArray errArray;
+        for (int code : errors.codes) errArray.append(code);
+        obj["errors"] = errArray;
         return obj;
     }
 };
@@ -220,6 +298,14 @@ inline std::shared_ptr<IDeviceData> createDeviceData(int deviceId)
     }
     if (IS_UP_CONVERTER(deviceId) || IS_UPC_SWITCH(deviceId)) {
         return std::make_shared<UPData>(deviceId);
+    }
+
+    if (deviceId == ID_TEMP_SNS_BOREAS_3) {
+        return std::make_shared<Boreas3Data>(deviceId);
+    }
+
+    if (deviceId == ID_TEMP_SNS_TE_MONITOR_V6) {
+        return std::make_shared<TEMonitorV6Data>(deviceId);
     }
 
     // Если тип неизвестен или специфичен, можно вернуть заглушку или расширить фабрику

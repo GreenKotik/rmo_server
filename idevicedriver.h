@@ -8,6 +8,9 @@
 #include "devicedata.h"
 #include "deviceids.h"
 
+// ✅ Используем forward declaration вместо include, чтобы избежать циклических зависимостей
+struct EquipmentConnection;
+
 // ============================================================================
 // ✅ СТРУКТУРА ДЛЯ КОМАНД УПРАВЛЕНИЯ
 // ============================================================================
@@ -31,6 +34,12 @@ public:
         : QObject(parent), m_deviceId(deviceId), m_connected(false) {}
 
     virtual ~IDeviceDriver() = default;
+
+    // ✅ НОВОЕ: Виртуальный метод для передачи параметров подключения
+    // По умолчанию ничего не делает — переопределяется в конкретных драйверах
+    virtual void setConnectionParams(const EquipmentConnection &conn) {
+        Q_UNUSED(conn);
+    }
 
     // ✅ Методы подключения
     virtual bool connect() = 0;

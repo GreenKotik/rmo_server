@@ -4,6 +4,7 @@
 #include <QString>
 #include <QMap>
 #include <QObject>
+#include <QDebug>
 
 // ============================================================================
 // ✅ СТРУКТУРА ИНФОРМАЦИИ ОБ АВАРИИ
@@ -53,7 +54,12 @@ public:
 
 private:
     AlarmRegistry();
-    ~AlarmRegistry() = default;
+    ~AlarmRegistry()
+    {
+        qDebug() << "[AlarmRegistry] Деструктор вызван";
+        // Очистка данных
+        qDebug() << "[AlarmRegistry] Деструктор завершён";
+    }
     AlarmRegistry(const AlarmRegistry&) = delete;
     AlarmRegistry& operator=(const AlarmRegistry&) = delete;
 

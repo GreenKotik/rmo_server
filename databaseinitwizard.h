@@ -21,9 +21,10 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QDebug>
-#include <QScrollBar>       // ✅ ДОБАВИТЬ ЭТУ СТРОКУ
-#include <QApplication>       // ✅ ДОБАВИТЬ ЭТУ СТРОКУ
-#include "databasemanager.h"  // Для CryptoHelper
+#include <QScrollBar>
+#include <QApplication>
+#include <QDateTime>
+#include "databasemanager.h"
 
 // ============================================================================
 // ✅ МАСТЕР ИНИЦИАЛИЗАЦИИ БАЗЫ ДАННЫХ
@@ -42,7 +43,7 @@ public:
         , m_dbName(currentDbName)
     {
         setWindowTitle("Мастер инициализации базы данных");
-        setFixedSize(600, 600);
+        setFixedSize(600, 650);
         setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
         QVBoxLayout *mainLayout = new QVBoxLayout(this);
@@ -192,7 +193,6 @@ private:
     {
         QString timestamp = QDateTime::currentDateTime().toString("HH:mm:ss");
         m_logEdit->append(QString("[%1] %2").arg(timestamp, message));
-        // ✅ Прокрутка вниз
         QScrollBar *sb = m_logEdit->verticalScrollBar();
         sb->setValue(sb->maximum());
     }
@@ -232,7 +232,7 @@ private:
         QSqlDatabase tempDb = QSqlDatabase::addDatabase("QPSQL", "init_temp_connection");
         tempDb.setHostName(host);
         tempDb.setPort(port);
-        tempDb.setDatabaseName("postgres");  // ✅ Служебная БД, всегда есть
+        tempDb.setDatabaseName("postgres");
         tempDb.setUserName(pgUser);
         tempDb.setPassword(pgPass);
 
@@ -244,7 +244,6 @@ private:
                 "• Запущен ли PostgreSQL сервер\n"
                 "• Правильность логина/пароля пользователя postgres\n"
                 "• Доступность хоста " + host + ":" + QString::number(port));
-            // ✅ ПРАВИЛЬНОЕ ЗАКРЫТИЕ
             {
                 QSqlDatabase db = QSqlDatabase::database("init_temp_connection");
                 if (db.isOpen()) db.close();
@@ -273,10 +272,7 @@ private:
         if (!dbExists) {
             appendLog("Шаг 3/5: Создание базы данных '" + dbName + "'...");
 
-            // ⚠️ ВАЖНО: CREATE DATABASE нельзя выполнять в транзакции
-            // и нельзя использовать bind values для имени БД
             QSqlQuery createDbQuery(tempDb);
-            // ✅ Экранируем имя БД (защита от SQL-инъекций)
             QString safeDbName = dbName;
             safeDbName.replace("\"", "\"\"");
 
@@ -284,7 +280,6 @@ private:
                 appendLog("❌ ОШИБКА создания БД: " + createDbQuery.lastError().text());
                 QMessageBox::critical(this, "Ошибка",
                     "Не удалось создать базу данных:\n" + createDbQuery.lastError().text());
-                // ✅ ПРАВИЛЬНОЕ ЗАКРЫТИЕ
                 {
                     QSqlDatabase db = QSqlDatabase::database("init_temp_connection");
                     if (db.isOpen()) db.close();
@@ -299,7 +294,6 @@ private:
             appendLog("Шаг 3/5: Пропущен (БД уже существует)");
         }
 
-        // ✅ ПРАВИЛЬНОЕ ЗАКРЫТИЕ
         {
             QSqlDatabase db = QSqlDatabase::database("init_temp_connection");
             if (db.isOpen()) db.close();
@@ -320,7 +314,6 @@ private:
             appendLog("❌ ОШИБКА подключения к новой БД: " + newDb.lastError().text());
             QMessageBox::critical(this, "Ошибка",
                 "Не удалось подключиться к созданной БД:\n" + newDb.lastError().text());
-            // ✅ ПРАВИЛЬНОЕ ЗАКРЫТИЕ
             {
                 QSqlDatabase db = QSqlDatabase::database("init_new_db");
                 if (db.isOpen()) db.close();
@@ -331,7 +324,6 @@ private:
             return;
         }
 
-        // ✅ Создание таблицы users (IF NOT EXISTS — безопасно)
         QSqlQuery createTableQuery(newDb);
         QString createTableSql = R"(
             CREATE TABLE IF NOT EXISTS users (
@@ -349,7 +341,6 @@ private:
             appendLog("❌ ОШИБКА создания таблицы: " + createTableQuery.lastError().text());
             QMessageBox::critical(this, "Ошибка",
                 "Не удалось создать таблицу users:\n" + createTableQuery.lastError().text());
-            // ✅ ПРАВИЛЬНОЕ ЗАКРЫТИЕ
             {
                 QSqlDatabase db = QSqlDatabase::database("init_new_db");
                 if (db.isOpen()) db.close();
@@ -364,7 +355,6 @@ private:
         // === ШАГ 5: Создание администратора ===
         appendLog("Шаг 5/5: Создание администратора '" + adminUser + "'...");
 
-        // ✅ Проверяем, есть ли уже такой пользователь
         QSqlQuery checkAdminQuery(newDb);
         checkAdminQuery.prepare("SELECT COUNT(*) FROM users WHERE username = :username");
         checkAdminQuery.bindValue(":username", CryptoHelper::encrypt(adminUser));
@@ -377,7 +367,6 @@ private:
         if (adminExists) {
             appendLog("ℹ️  Администратор '" + adminUser + "' уже существует. Сброс пароля...");
 
-            // ✅ Сбрасываем пароль
             QSqlQuery resetQuery(newDb);
             resetQuery.prepare(
                 "UPDATE users SET password = :password, role = :role, is_active = TRUE, "
@@ -393,7 +382,6 @@ private:
                 appendLog("✅ Пароль администратора сброшен");
             }
         } else {
-            // ✅ Создаём нового администратора
             QSqlQuery insertAdminQuery(newDb);
             insertAdminQuery.prepare(
                 "INSERT INTO users (username, password, role, is_active) "
@@ -407,7 +395,6 @@ private:
                 appendLog("❌ ОШИБКА создания администратора: " + insertAdminQuery.lastError().text());
                 QMessageBox::critical(this, "Ошибка",
                     "Не удалось создать администратора:\n" + insertAdminQuery.lastError().text());
-                // ✅ ПРАВИЛЬНОЕ ЗАКРЫТИЕ
                 {
                     QSqlDatabase db = QSqlDatabase::database("init_new_db");
                     if (db.isOpen()) db.close();
@@ -420,7 +407,6 @@ private:
             appendLog("✅ Администратор '" + adminUser + "' успешно создан");
         }
 
-        // ✅ ПРАВИЛЬНОЕ ЗАКРЫТИЕ
         {
             QSqlDatabase db = QSqlDatabase::database("init_new_db");
             if (db.isOpen()) db.close();
@@ -443,7 +429,7 @@ private:
         dbConfig["host"] = host;
         dbConfig["port"] = port;
         dbConfig["dbName"] = dbName;
-        dbConfig["user"] = pgUser;  // ✅ Используем того же пользователя PostgreSQL
+        dbConfig["user"] = pgUser;
         dbConfig["password"] = CryptoHelper::encrypt(pgPass);
         obj["database"] = dbConfig;
 
@@ -468,7 +454,9 @@ private:
                     "• База данных: %1\n"
                     "• Таблица: users\n"
                     "• Администратор: %2\n\n"
-                    "Нажмите 'OK' для продолжения работы с программой.")
+                    "Нажмите 'OK' для продолжения.\n"
+                    "Далее вам нужно будет выбрать пользователя 'admin' в списке авторизации\n"
+                    "и ввести пароль для входа в систему.")
                 .arg(dbName, adminUser));
 
         accept();

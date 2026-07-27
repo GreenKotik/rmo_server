@@ -35,6 +35,53 @@ BaseDocWidget::BaseDocWidget(QWidget *parent)
 
 }
 
+BaseDocWidget::~BaseDocWidget()
+{
+    qDebug() << "[BaseDocWidget] Деструктор НАЧАЛО:" << m_filePath;
+
+    // 1. Останавливаем таймер heartbeat
+    if (m_docHeartbeatTimer) {
+        m_docHeartbeatTimer->stop();
+        qDebug() << "[BaseDocWidget] Heartbeat timer остановлен";
+    }
+
+    // 2. Отключаем все сигналы от сервера
+    if (m_docServer) {
+        m_docServer->disconnect();
+        m_docServer->close();
+        qDebug() << "[BaseDocWidget] DocServer закрыт";
+    }
+
+    // 3. Отключаем и удаляем все клиентские сокеты
+    for (QTcpSocket *sock : m_docClients) {
+        if (sock) {
+            sock->disconnect();
+            sock->abort();
+            sock->deleteLater();
+        }
+    }
+    m_docClients.clear();
+    m_docBuffers.clear();
+    m_docStates.clear();
+    qDebug() << "[BaseDocWidget] Клиентские сокеты очищены";
+
+    // 4. Корректная остановка PollScheduler
+    if (m_pollScheduler) {
+        qDebug() << "[BaseDocWidget] Остановка PollScheduler...";
+        m_pollScheduler->stop();
+
+        // Отключаем все сигналы от PollScheduler
+        m_pollScheduler->disconnect();
+
+        delete m_pollScheduler;
+        m_pollScheduler = nullptr;
+        qDebug() << "[BaseDocWidget] PollScheduler удалён";
+    }
+
+    qDebug() << "[BaseDocWidget] Деструктор ЗАВЕРШЕНИЕ:" << m_filePath;
+}
+
+
 void BaseDocWidget::initDocumentNetwork(AppMode mode, quint16 listenPort, const QString &connectTo, quint16 connectPort)
 {
     if (mode == AppMode::Server) {
@@ -406,6 +453,12 @@ void BaseDocWidget::loadAndValidateEquipmentConnections()
         m_equipmentConnections[i].snmpV3AuthPassword = connObj.value("snmpV3AuthPassword").toString();
         m_equipmentConnections[i].snmpV3PrivProtocol = connObj.value("snmpV3PrivProtocol").toString("DES");
         m_equipmentConnections[i].snmpV3PrivPassword = connObj.value("snmpV3PrivPassword").toString();
+        // ✅ НОВОЕ: Modbus/COM параметры
+        m_equipmentConnections[i].comPort = connObj.value("modbusComPort").toString();
+        m_equipmentConnections[i].baudRate = connObj.value("modbusBaudRate").toInt(9600);
+        m_equipmentConnections[i].dataBits = connObj.value("modbusDataBits").toInt(8);
+        m_equipmentConnections[i].parity = connObj.value("modbusParity").toString("None");
+        m_equipmentConnections[i].stopBits = connObj.value("modbusStopBits").toInt(1);
     }
 
     // ✅ Проверяем строки, которых нет в JSON (они остались с errorCode = 4)
@@ -732,16 +785,6 @@ void BaseDocWidget::triggerIndicatorBlink()
     m_titleIndicator->trigger(300);
 }
 
-BaseDocWidget::~BaseDocWidget()
-{
-    // ✅ Корректная остановка всех потоков опроса перед уничтожением виджета
-    if (m_pollScheduler) {
-        m_pollScheduler->stop();
-        delete m_pollScheduler;
-        m_pollScheduler = nullptr;
-    }
-    qDebug() << "[BaseDocWidget] Уничтожен:" << m_filePath;
-}
 
 // ✅ НОВЫЙ МЕТОД: Включить/выключить режим быстрого опроса
 void BaseDocWidget::setFastPolling(bool enabled)

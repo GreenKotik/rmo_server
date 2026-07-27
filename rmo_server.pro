@@ -1,4 +1,5 @@
-QT       += core gui widgets network sql
+QT       += core gui widgets network sql 
+QT += serialport  # ✅ Для поддержки COM-портов
 CONFIG   += c++17
 TARGET    = rmo_server
 TEMPLATE  = app
@@ -6,12 +7,14 @@ TEMPLATE  = app
 SOURCES += \
     alarmpanel.cpp \
     alarmregistry.cpp \
+    boreas3driver.cpp \
     changepassworddialog.cpp \
     equipmentconfigdialog.cpp \
     equipmentsettingsdialog.cpp \
     ledindicator.cpp \
     main.cpp \
     mainwindow.cpp \
+    modbusclient.cpp \
     networkcontroller.cpp \
     basedocwidget.cpp \
     antennawidget.cpp \
@@ -20,13 +23,18 @@ SOURCES += \
     energowidget.cpp \
     pollscheduler.cpp \
     screenconfigdialog.cpp \
-    databasemanager.cpp
+    databasemanager.cpp \
+    serialportclient.cpp \
+    snmpclient.cpp \
+    tcpasciiclient.cpp \
+    temonitorv6driver.cpp
 
 HEADERS += \
     alarmpanel.h \
     alarmregistry.h \
     authdialog.h \
     authrequireddialog.h \
+    boreas3driver.h \
     changepassworddialog.h \
     connectionparamsdialog.h \
     databaseconfigdialog.h \
@@ -39,6 +47,7 @@ HEADERS += \
     idevicedriver.h \
     ledindicator.h \
     mainwindow.h \
+    modbusclient.h \
     networkcontroller.h \
     basedocwidget.h \
     antennawidget.h \
@@ -49,7 +58,11 @@ HEADERS += \
     pollscheduler.h \
     screenconfigdialog.h \
     databasemanager.h \
+    serialportclient.h \
     serverclientconfigdialog.h \
+    snmpclient.h \
+    tcpasciiclient.h \
+    temonitorv6driver.h \
     temperaturedriver.h \
     usermanagementdialog.h
 

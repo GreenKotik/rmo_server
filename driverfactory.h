@@ -6,6 +6,8 @@
 #include "idevicedriver.h"
 #include "deviceids.h"
 #include "temperaturedriver.h"
+#include "boreas3driver.h"  // ✅ ДОБАВИТЬ
+#include "temonitorv6driver.h"
 
 // ============================================================================
 // ✅ ФАБРИКА ДРАЙВЕРОВ УСТРОЙСТВ
@@ -16,9 +18,17 @@ public:
     // ✅ Создать драйвер по deviceId
     static std::unique_ptr<IDeviceDriver> createDriver(int deviceId, QObject *parent = nullptr)
     {
+        // ✅ Драйвер Boreas 3 (SNMP)
+        if (deviceId == ID_TEMP_SNS_BOREAS_3) {
+            return std::make_unique<Boreas3Driver>(deviceId, parent);
+        }
+
         // ✅ Тестовый драйвер для датчиков температуры
         if (IS_TEMP_SENSOR(deviceId) || IS_TEMP_RECEIVER(deviceId)) {
             return std::make_unique<TemperatureDriver>(deviceId, parent);
+        }
+        if (deviceId == ID_TEMP_SNS_TE_MONITOR_V6) {
+            return std::make_unique<TEMonitorV6Driver>(deviceId, parent);
         }
 
         // TODO: Добавить остальные драйверы по мере реализации

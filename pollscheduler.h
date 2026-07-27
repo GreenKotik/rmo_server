@@ -96,6 +96,7 @@ private:
     // ✅ Поиск цепочки по ID (возвращает указатель и пул, в котором она находится)
     PollChain* findChainById(int chainId, PoolType &outPool) const;
 
+    bool m_stopping = false;  // ✅ НОВОЕ: Флаг для предотвращения двойной остановки
     BaseDocWidget *m_docWidget;
     QTimer *m_pollTimer;
 

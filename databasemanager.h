@@ -447,7 +447,14 @@ public:
 
 private:
     DatabaseManager() = default;
-    ~DatabaseManager() { if (m_db.isOpen()) m_db.close(); }
+    ~DatabaseManager()
+    {
+        qDebug() << "[DatabaseManager] Деструктор вызван";
+        if (m_db.isOpen()) {
+            m_db.close();
+        }
+        qDebug() << "[DatabaseManager] Деструктор завершён";
+    }
     DatabaseManager(const DatabaseManager&) = delete;
     DatabaseManager& operator=(const DatabaseManager&) = delete;
     // В private секции добавить:

@@ -3,6 +3,7 @@
 
 #include <QDialog>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QFormLayout>
 #include <QComboBox>
 #include <QLineEdit>
@@ -11,9 +12,9 @@
 #include <QGroupBox>
 #include <QPushButton>
 #include <QLabel>
-#include <QHBoxLayout>
 #include <QMessageBox>
-#include "mainwindow.h" // Для EquipmentConnection
+#include <QSerialPortInfo>
+#include "mainwindow.h"
 
 class ConnectionParamsDialog : public QDialog
 {
@@ -23,7 +24,7 @@ public:
         : QDialog(parent)
     {
         setWindowTitle("Параметры соединения");
-        setFixedSize(500, 650);
+        setFixedSize(550, 750);
 
         QVBoxLayout *mainLayout = new QVBoxLayout(this);
         mainLayout->setSpacing(10);
@@ -34,7 +35,15 @@ public:
         QFormLayout *interfaceLayout = new QFormLayout(interfaceGroup);
 
         interfaceCombo = new QComboBox(this);
-        interfaceCombo->addItems({"TCP/IP", "SNMP"});
+        interfaceCombo->addItems({
+            "TCP/IP",
+            "SNMP",
+            "Modbus TCP",
+            "Modbus RTU",
+            "RS-232",
+            "RS-422",
+            "RS-485"
+        });
         interfaceCombo->setStyleSheet(
             "QComboBox { padding: 4px; border: 1px solid #B0B0B0; border-radius: 3px; }"
             "QComboBox:focus { border: 1px solid #005A9E; }"
@@ -43,7 +52,7 @@ public:
 
         mainLayout->addWidget(interfaceGroup);
 
-        // === 2. Блок "Адрес подключения" (общий для всех интерфейсов) ===
+        // === 2. Блок "Адрес подключения" (для TCP/IP, Modbus TCP, SNMP) ===
         addressGroup = new QGroupBox("Адрес подключения", this);
         QFormLayout *addressLayout = new QFormLayout(addressGroup);
 
@@ -65,7 +74,54 @@ public:
 
         mainLayout->addWidget(addressGroup);
 
-        // === 3. Блок "SNMP V1" ===
+        // === 3. Блок "Последовательный порт" (для Modbus RTU, RS-232/422/485) ===
+        serialGroup = new QGroupBox("Последовательный порт", this);
+        QFormLayout *serialLayout = new QFormLayout(serialGroup);
+
+        comPortCombo = new QComboBox(this);
+        comPortCombo->setEditable(true);
+        refreshComPorts();
+        comPortCombo->setStyleSheet(
+            "QComboBox { padding: 4px; border: 1px solid #B0B0B0; border-radius: 3px; }"
+            "QComboBox:focus { border: 1px solid #005A9E; }"
+        );
+        serialLayout->addRow("COM-порт:", comPortCombo);
+
+        baudRateCombo = new QComboBox(this);
+        baudRateCombo->addItems({"9600", "19200", "38400", "57600", "115200"});
+        baudRateCombo->setCurrentText("9600");
+        baudRateCombo->setStyleSheet(
+            "QComboBox { padding: 4px; border: 1px solid #B0B0B0; border-radius: 3px; }"
+        );
+        serialLayout->addRow("Скорость (baud):", baudRateCombo);
+
+        dataBitsCombo = new QComboBox(this);
+        dataBitsCombo->addItems({"7", "8"});
+        dataBitsCombo->setCurrentText("8");
+        dataBitsCombo->setStyleSheet(
+            "QComboBox { padding: 4px; border: 1px solid #B0B0B0; border-radius: 3px; }"
+        );
+        serialLayout->addRow("Биты данных:", dataBitsCombo);
+
+        parityCombo = new QComboBox(this);
+        parityCombo->addItems({"None", "Even", "Odd"});
+        parityCombo->setCurrentText("None");
+        parityCombo->setStyleSheet(
+            "QComboBox { padding: 4px; border: 1px solid #B0B0B0; border-radius: 3px; }"
+        );
+        serialLayout->addRow("Чётность:", parityCombo);
+
+        stopBitsCombo = new QComboBox(this);
+        stopBitsCombo->addItems({"1", "2"});
+        stopBitsCombo->setCurrentText("1");
+        stopBitsCombo->setStyleSheet(
+            "QComboBox { padding: 4px; border: 1px solid #B0B0B0; border-radius: 3px; }"
+        );
+        serialLayout->addRow("Стоп-биты:", stopBitsCombo);
+
+        mainLayout->addWidget(serialGroup);
+
+        // === 4. Блок "SNMP V1" ===
         snmpV1Group = new QGroupBox("SNMP V1", this);
         snmpV1Group->setCheckable(true);
         snmpV1Group->setChecked(false);
@@ -76,7 +132,6 @@ public:
         );
         QFormLayout *snmpV1Layout = new QFormLayout(snmpV1Group);
 
-        // ✅ Community для чтения
         communityReadEdit = new QLineEdit(this);
         communityReadEdit->setText("public");
         communityReadEdit->setPlaceholderText("Обычно: public");
@@ -86,7 +141,6 @@ public:
         );
         snmpV1Layout->addRow("Community (чтение):", communityReadEdit);
 
-        // ✅ Community для записи
         communityWriteEdit = new QLineEdit(this);
         communityWriteEdit->setText("private");
         communityWriteEdit->setPlaceholderText("Обычно: private");
@@ -98,7 +152,7 @@ public:
 
         mainLayout->addWidget(snmpV1Group);
 
-        // === 4. Блок "SNMP V3" ===
+        // === 5. Блок "SNMP V3" ===
         snmpV3Group = new QGroupBox("SNMP V3", this);
         snmpV3Group->setCheckable(true);
         snmpV3Group->setChecked(false);
@@ -185,10 +239,27 @@ public:
         ipEdit->setText(conn.ipAddress);
         portSpin->setValue(conn.port);
 
-        snmpV1Group->setChecked(conn.snmpV1Enabled);
-        communityReadEdit->setText(conn.snmpV1CommunityRead);    // ✅ Read
-        communityWriteEdit->setText(conn.snmpV1CommunityWrite);  // ✅ Write
+        // Последовательный порт
+        if (!conn.comPort.isEmpty()) {
+            comPortCombo->setCurrentText(conn.comPort);
+        }
+        if (conn.baudRate > 0) {
+            baudRateCombo->setCurrentText(QString::number(conn.baudRate));
+        }
+        if (conn.dataBits > 0) {
+            dataBitsCombo->setCurrentText(QString::number(conn.dataBits));
+        }
+        if (!conn.parity.isEmpty()) {
+            parityCombo->setCurrentText(conn.parity);
+        }
+        if (conn.stopBits > 0) {
+            stopBitsCombo->setCurrentText(QString::number(conn.stopBits));
+        }
 
+        // SNMP параметры
+        snmpV1Group->setChecked(conn.snmpV1Enabled);
+        communityReadEdit->setText(conn.snmpV1CommunityRead);
+        communityWriteEdit->setText(conn.snmpV1CommunityWrite);
         snmpV3Group->setChecked(conn.snmpV3Enabled);
         snmpV3UsernameEdit->setText(conn.snmpV3Username);
         snmpV3AuthProtoCombo->setCurrentText(conn.snmpV3AuthProtocol);
@@ -205,10 +276,17 @@ public:
         conn.ipAddress = ipEdit->text();
         conn.port = portSpin->value();
 
-        conn.snmpV1Enabled = snmpV1Group->isChecked();
-        conn.snmpV1CommunityRead = communityReadEdit->text();    // ✅ Read
-        conn.snmpV1CommunityWrite = communityWriteEdit->text();  // ✅ Write
+        // Последовательный порт
+        conn.comPort = comPortCombo->currentText();
+        conn.baudRate = baudRateCombo->currentText().toInt();
+        conn.dataBits = dataBitsCombo->currentText().toInt();
+        conn.parity = parityCombo->currentText();
+        conn.stopBits = stopBitsCombo->currentText().toInt();
 
+        // SNMP параметры
+        conn.snmpV1Enabled = snmpV1Group->isChecked();
+        conn.snmpV1CommunityRead = communityReadEdit->text();
+        conn.snmpV1CommunityWrite = communityWriteEdit->text();
         conn.snmpV3Enabled = snmpV3Group->isChecked();
         conn.snmpV3Username = snmpV3UsernameEdit->text();
         conn.snmpV3AuthProtocol = snmpV3AuthProtoCombo->currentText();
@@ -218,36 +296,71 @@ public:
 
         return conn;
     }
+
 private slots:
     void onInterfaceChanged(const QString &interface)
     {
-        // ✅ Блок адреса виден ВСЕГДА
-        addressGroup->setVisible(true);
+        // Определяем, какие блоки показывать
+        bool showAddress = false;
+        bool showSerial = false;
+        bool showSnmp = false;
 
-        // ✅ Автоматически меняем порт при смене интерфейса
-        if (interface == "TCP/IP") {
+        if (interface == "TCP/IP" || interface == "Modbus TCP") {
+            showAddress = true;
             portSpin->setValue(502);
-            snmpV1Group->setVisible(false);
-            snmpV3Group->setVisible(false);
-        } else if (interface == "SNMP") {
-            portSpin->setValue(161);
-            snmpV1Group->setVisible(true);
-            snmpV3Group->setVisible(true);
         }
+        else if (interface == "SNMP") {
+            showAddress = true;
+            showSnmp = true;
+            portSpin->setValue(161);
+        }
+        else if (interface == "Modbus RTU" || interface == "RS-232" ||
+                 interface == "RS-422" || interface == "RS-485") {
+            showSerial = true;
+        }
+
+        addressGroup->setVisible(showAddress);
+        serialGroup->setVisible(showSerial);
+        snmpV1Group->setVisible(showSnmp);
+        snmpV3Group->setVisible(showSnmp);
     }
 
 private:
+    void refreshComPorts()
+    {
+        comPortCombo->clear();
+        const auto ports = QSerialPortInfo::availablePorts();
+        for (const QSerialPortInfo &info : ports) {
+            comPortCombo->addItem(info.portName());
+        }
+        // Если портов нет — добавляем заглушки для ручного ввода
+        if (comPortCombo->count() == 0) {
+            comPortCombo->addItem("COM1");
+            comPortCombo->addItem("COM2");
+            comPortCombo->addItem("/dev/ttyUSB0");
+            comPortCombo->addItem("/dev/ttyS0");
+        }
+    }
+
     QComboBox *interfaceCombo;
 
-    // TCP/IP
-    QGroupBox *addressGroup;  // ✅ Общий блок адреса
+    // TCP/IP адрес
+    QGroupBox *addressGroup;
     QLineEdit *ipEdit;
     QSpinBox *portSpin;
 
+    // Последовательный порт
+    QGroupBox *serialGroup;
+    QComboBox *comPortCombo;
+    QComboBox *baudRateCombo;
+    QComboBox *dataBitsCombo;
+    QComboBox *parityCombo;
+    QComboBox *stopBitsCombo;
+
     // SNMP V1
     QGroupBox *snmpV1Group;
-    QLineEdit *communityReadEdit;   // ✅ Было: communityEdit
-    QLineEdit *communityWriteEdit;  // ✅ НОВОЕ
+    QLineEdit *communityReadEdit;
+    QLineEdit *communityWriteEdit;
 
     // SNMP V3
     QGroupBox *snmpV3Group;

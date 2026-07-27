@@ -33,19 +33,21 @@ enum class DocType { Antenna, Transmitter, Modulator, Energo };
 struct EquipmentConnection {
     QString name;
     bool connected;
-    QString address;
+    QString address;              // Адрес устройства (Slave ID для Modbus, адрес для RS-485/422)
     QString equipmentType;
-    int deviceId = ID_UNKNOWN;  // ✅ НОВОЕ: код типа устройства (из deviceids.h)
+    int deviceId = ID_UNKNOWN;
     bool useStream;
-    bool slowPool = false;  // ✅ НОВОЕ: помечена ли цепочка как "медленная"
-    QString interface;
-    QString ipAddress;
-    int port;
+    bool slowPool = false;
 
+    // === Сетевые параметры ===
+    QString interface;            // Тип интерфейса: "TCP/IP", "SNMP", "Modbus TCP", "Modbus RTU", "RS-232", "RS-422", "RS-485"
+    QString ipAddress;            // IP-адрес (для TCP/SNMP/Modbus TCP)
+    int port;                     // Порт (для TCP/SNMP/Modbus TCP)
+
+    // === SNMP параметры ===
     bool snmpV1Enabled;
     QString snmpV1CommunityRead;
     QString snmpV1CommunityWrite;
-
     bool snmpV3Enabled;
     QString snmpV3Username;
     QString snmpV3AuthProtocol;
@@ -53,19 +55,33 @@ struct EquipmentConnection {
     QString snmpV3PrivProtocol;
     QString snmpV3PrivPassword;
 
-    int errorCode = 4; // ✅ Код ошибки (0 = ОК, 4 = рассинхронизация индексов)
+    // === Параметры последовательного интерфейса (для Modbus RTU, RS-232/422/485) ===
+    QString comPort;              // COM-порт (например, "COM1", "/dev/ttyUSB0")
+    int baudRate = 9600;          // Скорость передачи (9600, 19200, 38400, 57600, 115200)
+    int dataBits = 8;             // Биты данных (7, 8)
+    QString parity = "None";      // Чётность ("None", "Even", "Odd")
+    int stopBits = 1;             // Стоп-биты (1, 2)
+
+    int errorCode = 4;
 
     EquipmentConnection()
         : connected(false),
-          deviceId(ID_UNKNOWN),  // ✅ Инициализация в конструкторе
+          deviceId(ID_UNKNOWN),
           useStream(false),
-          slowPool(false),  // ✅ НОВОЕ: по умолчанию не медленная
-          interface("TCP/IP"), port(502),
+          slowPool(false),
+          interface("TCP/IP"),
+          port(502),
           snmpV1Enabled(false),
           snmpV1CommunityRead("public"),
           snmpV1CommunityWrite("private"),
           snmpV3Enabled(false),
-          snmpV3AuthProtocol("MD5"), snmpV3PrivProtocol("DES"),
+          snmpV3AuthProtocol("MD5"),
+          snmpV3PrivProtocol("DES"),
+          comPort(""),
+          baudRate(9600),
+          dataBits(8),
+          parity("None"),
+          stopBits(1),
           errorCode(4) {}
 };
 

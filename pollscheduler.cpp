@@ -20,8 +20,29 @@ PollScheduler::PollScheduler(BaseDocWidget *docWidget, QObject *parent)
 
 PollScheduler::~PollScheduler()
 {
+    qDebug() << "[PollScheduler] Деструктор НАЧАЛО";
+
+    // 1. Останавливаем таймер
+    if (m_pollTimer) {
+        m_pollTimer->stop();
+        m_pollTimer->disconnect();
+        qDebug() << "[PollScheduler] Таймер остановлен";
+    }
+
+    // 2. Останавливаем все потоки
     stop();
-    qDebug() << "[PollScheduler] Уничтожен планировщик опроса";
+
+    // 3. Удаляем все потоки
+    for (QThread *thread : m_threads) {
+        if (thread) {
+            thread->quit();
+            thread->wait(1000);
+            delete thread;
+        }
+    }
+    m_threads.clear();
+
+    qDebug() << "[PollScheduler] Деструктор ЗАВЕРШЕНИЕ";
 }
 
 void PollScheduler::initializeChains()
@@ -120,9 +141,6 @@ void PollScheduler::initializeChains()
         // (По умолчанию все цепочки в Fast Pool, но это может измениться)
         connect(chain, &PollChain::cycleFinished, this, &PollScheduler::onFastCycleFinished);
 
-        // Очистка при завершении потока
-        connect(thread, &QThread::finished, chain, &QObject::deleteLater);
-
         // ✅ ОПРЕДЕЛЯЕМ ПУЛ ЦЕПОЧКИ на основе поля slowPool
         // Если хотя бы одно устройство в цепочке помечено как slowPool — вся цепочка в Slow Pool
         bool shouldBeSlow = false;
@@ -187,32 +205,49 @@ void PollScheduler::start()
 
 void PollScheduler::stop()
 {
+    qDebug() << "[PollScheduler] Остановка планировщика...";
+
+    // 1. Останавливаем таймер
     m_pollTimer->stop();
 
-    // Останавливаем все цепочки из обоих пулов
+    // 2. Останавливаем все цепочки
     for (PollChain *chain : m_fastChains) {
-        QMetaObject::invokeMethod(chain, "stop", Qt::QueuedConnection);
+        if (chain) chain->stop();
     }
     for (PollChain *chain : m_slowChains) {
-        QMetaObject::invokeMethod(chain, "stop", Qt::QueuedConnection);
+        if (chain) chain->stop();
     }
 
-    // Ждём завершения потоков
+    // 3. Останавливаем все потоки
     for (QThread *thread : m_threads) {
-        if (thread->isRunning()) {
+        if (thread && thread->isRunning()) {
             thread->quit();
-            thread->wait(1000);
+            thread->wait(3000);  // Ждём завершения потока
         }
     }
 
-    // Очищаем оба пула
+    // 4. Удаляем цепочки вручную
+    for (PollChain *chain : m_fastChains) {
+        delete chain;
+    }
+    for (PollChain *chain : m_slowChains) {
+        delete chain;
+    }
+
+    // 5. Удаляем потоки вручную
+    for (QThread *thread : m_threads) {
+        delete thread;
+    }
+
+    // 6. Очищаем списки
     m_fastChains.clear();
     m_slowChains.clear();
     m_threads.clear();
+
     m_fastActiveChains = 0;
     m_slowActiveChains = 0;
 
-    qDebug() << "[PollScheduler] Остановлен";
+    qDebug() << "[PollScheduler] Остановлен корректно";
 }
 
 void PollScheduler::setPollingInterval(int msec)
@@ -239,24 +274,22 @@ void PollScheduler::setFastMode(bool enabled)
 void PollScheduler::sendCommand(const QString &deviceName, const ControlCommand &cmd)
 {
     // Ищем цепочку в обоих пулах
-    for (int i = 0; i < m_fastChains.size(); ++i) {
+    for (size_t i = 0; i < m_fastChains.size(); ++i) {
         PollChain *chain = m_fastChains[i];
         QMetaObject::invokeMethod(chain, "enqueueCommand", Qt::QueuedConnection,
-            Q_ARG(int, 0),
-            Q_ARG(ControlCommand, cmd));
+                                  Q_ARG(int, 0),
+                                  Q_ARG(ControlCommand, cmd));
         qDebug() << "[PollScheduler] Команда отправлена в Fast цепочку" << (i + 1);
         return;
     }
-
-    for (int i = 0; i < m_slowChains.size(); ++i) {
+    for (size_t i = 0; i < m_slowChains.size(); ++i) {
         PollChain *chain = m_slowChains[i];
         QMetaObject::invokeMethod(chain, "enqueueCommand", Qt::QueuedConnection,
-            Q_ARG(int, 0),
-            Q_ARG(ControlCommand, cmd));
+                                  Q_ARG(int, 0),
+                                  Q_ARG(ControlCommand, cmd));
         qDebug() << "[PollScheduler] Команда отправлена в Slow цепочку" << (i + 1);
         return;
     }
-
     qWarning() << "[PollScheduler] Не найдена цепочка для устройства:" << deviceName;
 }
 

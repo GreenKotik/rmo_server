@@ -349,9 +349,9 @@ private:
                 conn.connected = check->isChecked();
             }
         }
+        // ✅ Столбец 2: Адрес устройства (Slave ID / логический адрес)
         if (QLineEdit *edit = qobject_cast<QLineEdit*>(equipmentTable->cellWidget(rowIndex, 2))) {
-            conn.address = edit->text();
-            conn.ipAddress = edit->text(); // Синхронизируем с address
+            conn.address = edit->text(); // Сохраняем именно адрес устройства
         }
         // ✅ Столбец 3: Оборудование (текст + deviceId)
         if (QComboBox *combo = qobject_cast<QComboBox*>(equipmentTable->cellWidget(rowIndex, 3))) {
@@ -380,8 +380,13 @@ private:
             conn.snmpV3AuthPassword = savedConn.snmpV3AuthPassword;
             conn.snmpV3PrivProtocol = savedConn.snmpV3PrivProtocol;
             conn.snmpV3PrivPassword = savedConn.snmpV3PrivPassword;
+             // ✅ НОВОЕ: Параметры последовательного порта
+            conn.comPort = savedConn.comPort;
+            conn.baudRate = savedConn.baudRate;
+            conn.dataBits = savedConn.dataBits;
+            conn.parity = savedConn.parity;
+            conn.stopBits = savedConn.stopBits;
         }
-
         // Открываем диалог
         ConnectionParamsDialog dlg(this);
         dlg.setConnectionData(conn);
@@ -404,14 +409,12 @@ private:
                 m_connections[rowIndex].snmpV3AuthPassword = updatedConn.snmpV3AuthPassword;
                 m_connections[rowIndex].snmpV3PrivProtocol = updatedConn.snmpV3PrivProtocol;
                 m_connections[rowIndex].snmpV3PrivPassword = updatedConn.snmpV3PrivPassword;
-
-                // ✅ Синхронизируем IP-адрес с полем "Адрес" в таблице
-                if (updatedConn.interface == "TCP/IP") {
-                    if (QLineEdit *edit = qobject_cast<QLineEdit*>(
-                            equipmentTable->cellWidget(rowIndex, 2))) {
-                        edit->setText(updatedConn.ipAddress);
-                    }
-                }
+                // ✅ НОВОЕ: Параметры последовательного порта
+                m_connections[rowIndex].comPort = updatedConn.comPort;
+                m_connections[rowIndex].baudRate = updatedConn.baudRate;
+                m_connections[rowIndex].dataBits = updatedConn.dataBits;
+                m_connections[rowIndex].parity = updatedConn.parity;
+                m_connections[rowIndex].stopBits = updatedConn.stopBits;
             }
 
             qDebug() << "[EquipmentConfig] Параметры соединения обновлены для строки" << rowIndex;
@@ -477,6 +480,7 @@ void onSave()
                 conn.slowPool = check->isChecked();
             }
         }
+
         // ✅ НОВЫЕ ПОЛЯ: берём из m_connections
         if (i < m_connections.size()) {
             conn.interface = m_connections[i].interface;
@@ -491,6 +495,12 @@ void onSave()
             conn.snmpV3AuthPassword = m_connections[i].snmpV3AuthPassword;
             conn.snmpV3PrivProtocol = m_connections[i].snmpV3PrivProtocol;
             conn.snmpV3PrivPassword = m_connections[i].snmpV3PrivPassword;
+            // ✅ НОВОЕ: Параметры последовательного порта
+            conn.comPort = m_connections[i].comPort;
+            conn.baudRate = m_connections[i].baudRate;
+            conn.dataBits = m_connections[i].dataBits;
+            conn.parity = m_connections[i].parity;
+            conn.stopBits = m_connections[i].stopBits;
         }
 
         // ✅ СБРАСЫВАЕМ КОД ОШИБКИ (если была)
@@ -555,6 +565,12 @@ void onSave()
         connObj["snmpV3AuthPassword"] = conn.snmpV3AuthPassword;
         connObj["snmpV3PrivProtocol"] = conn.snmpV3PrivProtocol;
         connObj["snmpV3PrivPassword"] = conn.snmpV3PrivPassword;
+        // ✅ НОВОЕ: Параметры последовательного порта
+        connObj["modbusComPort"] = conn.comPort;
+        connObj["modbusBaudRate"] = conn.baudRate;
+        connObj["modbusDataBits"] = conn.dataBits;
+        connObj["modbusParity"] = conn.parity;
+        connObj["modbusStopBits"] = conn.stopBits;
         connectionsArray.append(connObj);
     }
 
