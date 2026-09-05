@@ -1,31 +1,19 @@
 #include "peredatchikwidget.h"
-#include "ui_peredatchikform.h"
-
+#include "devicedata.h"  // ✅ Для доступа к Boreas3Data
 #include <QFile>
 #include <QJsonDocument>
-#include <QJsonObject>
-#include <QFileInfo>
-#include <QMessageBox>
+#include <QDebug>
+#include <memory>
 
 PeredatchikWidget::PeredatchikWidget(QWidget *parent)
     : BaseDocWidget(parent), ui(new Ui::PeredatchikForm)
 {
     ui->setupUi(this);
-    setWindowTitle("Передатчик (новый)");
-
-    ui->bandBox->addItems({"ДВ", "СВ", "КВ", "УКВ"});
-    ui->modeBox->addItems({"Телефония", "Телеграф", "Цифровой"});
-
-    connect(ui->txNameEdit, &QLineEdit::textChanged, this, &PeredatchikWidget::onFieldChanged);
-    connect(ui->bandBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PeredatchikWidget::onFieldChanged);
-    connect(ui->modeBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &PeredatchikWidget::onFieldChanged);
-    connect(ui->outPowerSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &PeredatchikWidget::onFieldChanged);
-    connect(ui->onAirCheck, &QCheckBox::stateChanged, this, &PeredatchikWidget::onFieldChanged);
-
-    // ✅ ДОБАВЛЕНО: Подключение кнопки применения (если она есть в UI)
-    if (ui->applyBtn) {
-        connect(ui->applyBtn, &QPushButton::clicked, this, &PeredatchikWidget::onApplyClicked);
-    }
+    // Инициализация UI нулями или прочерками
+    ui->labelTemp1->setText("Температура 1: --.- °C");
+    ui->labelTemp2->setText("Температура 2: --.- °C");
+    ui->labelTemp3->setText("Температура 3: --.- °C");
+    ui->labelTemp4->setText("Температура 4: --.- °C");
 }
 
 PeredatchikWidget::~PeredatchikWidget()
@@ -35,81 +23,47 @@ PeredatchikWidget::~PeredatchikWidget()
 
 QSize PeredatchikWidget::documentFixedSize() const
 {
-    return QSize(380, 380);
+    return QSize(475, 174);
 }
 
-void PeredatchikWidget::onFieldChanged()
+void PeredatchikWidget::loadFromFile(const QString &path)
 {
-    setModified(true);
-
-    QJsonObject state;
-    state["name"] = ui->txNameEdit->text();
-    state["band"] = ui->bandBox->currentText();
-    state["mode"] = ui->modeBox->currentText();
-    state["outPower"] = ui->outPowerSpin->value();
-    state["onAir"] = ui->onAirCheck->isChecked();
-
-    broadcastDocUpdate(state);
-}
-
-// ✅ ДОБАВЛЕНО: Реализация метода, которого не хватало линковщику
-void PeredatchikWidget::onApplyClicked()
-{
-    QMessageBox::information(this, "Действие", "Параметры передатчика успешно применены.");
-}
-
-void PeredatchikWidget::loadFromFile(const QString &filePath)
-{
-    // ✅ Используем новый метод, который сохраняет все секции
-    loadFromFilePreserveSections(filePath);
+    loadFromFilePreserveSections(path);
 }
 
 void PeredatchikWidget::saveToFile()
 {
-    if (m_filePath.isEmpty()) {
-        QMessageBox::warning(this, "Ошибка", "Путь к файлу не задан. Используйте 'Сохранить как...'");
-        return;
-    }
-
-    QJsonObject obj;
-    obj["name"] = ui->txNameEdit->text();
-    obj["band"] = ui->bandBox->currentText();
-    obj["mode"] = ui->modeBox->currentText();
-    obj["outPower"] = ui->outPowerSpin->value();
-    obj["onAir"] = ui->onAirCheck->isChecked();
-
-    QFile f(m_filePath);
-    if (!f.open(QIODevice::WriteOnly)) {
-        QMessageBox::warning(this, "Ошибка", "Не удалось сохранить файл:\n" + f.errorString());
-        return;
-    }
-
-    f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
-    f.close();
-
-    setModified(false);
-    setWindowTitle(QFileInfo(m_filePath).completeBaseName() + ".per");
+    saveToFilePreserveSections(filePath());
 }
 
 void PeredatchikWidget::processDocClientData(const QJsonObject &data)
 {
-    if (data.contains("name")) ui->txNameEdit->setText(data["name"].toString());
-    if (data.contains("band")) ui->bandBox->setCurrentText(data["band"].toString());
-    if (data.contains("mode")) ui->modeBox->setCurrentText(data["mode"].toString());
-    if (data.contains("outPower")) ui->outPowerSpin->setValue(data["outPower"].toInt());
-    if (data.contains("onAir")) ui->onAirCheck->setChecked(data["onAir"].toBool());
+    // Здесь можно добавить обработку команд от клиента, если потребуется
+    Q_UNUSED(data);
 }
 
-QJsonObject PeredatchikWidget::getDocumentParameters() const
+
+// ✅ РЕАЛИЗАЦИЯ ПАКЕТНОГО ОБНОВЛЕНИЯ UI (Двойная буферизация)
+void PeredatchikWidget::updateUIFromBuffer()
 {
-    QJsonObject params;
+    // ✅ Получаем унифицированные данные для 12-го слота (индекс 11)
+    auto tempData = getTemperatureDataForSlot(11);
+    if (!tempData) {
+        // Если данные ещё не получены — показываем прочерки
+        ui->labelTemp1->setText("Температура 1: --.- °C");
+        ui->labelTemp2->setText("Температура 2: --.- °C");
+        ui->labelTemp3->setText("Температура 3: --.- °C");
+        ui->labelTemp4->setText("Температура 4: --.- °C");
+        return;
+    }
 
-    // ✅ Собираем все параметры антенны
+    // ✅ Обновляем UI из унифицированной структуры
+    // Отображаем только первые 4 датчика (для Boreas 3 и TE Monitor V6)
+    ui->labelTemp1->setText(QString("Температура 1: %1 °C").arg(tempData->temperatures[0], 0, 'f', 1));
+    ui->labelTemp2->setText(QString("Температура 2: %1 °C").arg(tempData->temperatures[1], 0, 'f', 1));
+    ui->labelTemp3->setText(QString("Температура 3: %1 °C").arg(tempData->temperatures[2], 0, 'f', 1));
+    ui->labelTemp4->setText(QString("Температура 4: %1 °C").arg(tempData->temperatures[3], 0, 'f', 1));
 
-    return params;
-}
-
-void PeredatchikWidget::setDocumentParameters(const QJsonObject &params)
-{
-    // ✅ Устанавливаем параметры антенны
+    // ✅ Опционально: можно показать статусы датчиков (если есть аварии)
+    // Например, менять цвет текста при alarms[i] != 0
 }

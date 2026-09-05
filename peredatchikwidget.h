@@ -1,26 +1,30 @@
 #ifndef PEREDATCHIKWIDGET_H
 #define PEREDATCHIKWIDGET_H
+
 #include "basedocwidget.h"
-#include <QJsonObject>
-namespace Ui { class PeredatchikForm; }
+#include "ui_peredatchikform.h"
+#include "devicedata.h" // ✅ Чтобы видеть Boreas3Data
+#include <memory>
+
 class PeredatchikWidget : public BaseDocWidget
 {
     Q_OBJECT
 public:
     explicit PeredatchikWidget(QWidget *parent = nullptr);
-    ~PeredatchikWidget();
+    ~PeredatchikWidget() override;
+
     void loadFromFile(const QString &path) override;
     void saveToFile() override;
     QSize documentFixedSize() const override;
     DocType docType() const override { return DocType::Transmitter; }
     void processDocClientData(const QJsonObject &data) override;
-    // ✅ ОБЯЗАТЕЛЬНО ДОБАВИТЬ ЭТИ ОБЪЯВЛЕНИЯ:
-    QJsonObject getDocumentParameters() const override;
-    void setDocumentParameters(const QJsonObject &params) override;
-private slots:
-    void onFieldChanged();
-    void onApplyClicked();
+
+protected:
+    // ✅ Переопределяем метод пакетного обновления UI
+    void updateUIFromBuffer() override;
+
 private:
     Ui::PeredatchikForm *ui;
 };
-#endif
+
+#endif // PEREDATCHIKWIDGET_H

@@ -31,7 +31,7 @@ public:
         : QDialog(parent)
     {
         setWindowTitle("Конфигурация оборудования");
-        setMinimumSize(900, 800);
+        setMinimumSize(1100, 800);
 
         QVBoxLayout *mainLayout = new QVBoxLayout(this);
         mainLayout->setSpacing(12);

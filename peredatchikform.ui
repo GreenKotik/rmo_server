@@ -6,96 +6,108 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>380</width>
-    <height>427</height>
+    <width>475</width>
+    <height>174</height>
    </rect>
   </property>
   <property name="windowTitle">
    <string>Передатчик</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
-   <property name="spacing">
-    <number>12</number>
-   </property>
-   <property name="leftMargin">
-    <number>16</number>
-   </property>
-   <property name="topMargin">
-    <number>16</number>
-   </property>
-   <property name="rightMargin">
-    <number>16</number>
-   </property>
-   <property name="bottomMargin">
-    <number>16</number>
-   </property>
    <item>
-    <widget class="QLabel" name="labelName">
+    <widget class="QLabel" name="labelTitle">
+     <property name="font">
+      <font>
+       <pointsize>12</pointsize>
+       <bold>true</bold>
+      </font>
+     </property>
      <property name="text">
-      <string>Наименование:</string>
+      <string>Температура датчика (Boreas 3)</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
      </property>
     </widget>
    </item>
    <item>
-    <widget class="QLineEdit" name="txNameEdit">
-     <property name="placeholderText">
-      <string>Введите название...</string>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QLabel" name="labelBand">
-     <property name="text">
-      <string>Диапазон:</string>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QComboBox" name="bandBox"/>
-   </item>
-   <item>
-    <widget class="QLabel" name="labelMode">
-     <property name="text">
-      <string>Режим работы:</string>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QComboBox" name="modeBox"/>
-   </item>
-   <item>
-    <widget class="QLabel" name="labelPower">
-     <property name="text">
-      <string>Выходная мощность (Вт):</string>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QSpinBox" name="outPowerSpin">
-     <property name="maximum">
-      <number>1000</number>
-     </property>
-     <property name="value">
-      <number>50</number>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QCheckBox" name="onAirCheck">
-     <property name="text">
-      <string>В эфире (Работа на излучение)</string>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QPushButton" name="applyBtn">
-     <property name="text">
-      <string>Применить</string>
-     </property>
-     <property name="default">
-      <bool>true</bool>
-     </property>
-    </widget>
+    <layout class="QGridLayout" name="gridLayout">
+     <item row="7" column="0">
+      <widget class="QLabel" name="labelTemp4">
+       <property name="font">
+        <font>
+         <pointsize>9</pointsize>
+        </font>
+       </property>
+       <property name="text">
+        <string>Температура 4: --.- °C</string>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="0">
+      <widget class="QLabel" name="labelTemp2">
+       <property name="font">
+        <font>
+         <pointsize>9</pointsize>
+        </font>
+       </property>
+       <property name="text">
+        <string>Температура 2: --.- °C</string>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="0">
+      <widget class="QLabel" name="labelTemp3">
+       <property name="font">
+        <font>
+         <pointsize>9</pointsize>
+        </font>
+       </property>
+       <property name="text">
+        <string>Температура 3: --.- °C</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="0">
+      <widget class="QLabel" name="labelTemp1">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>16777215</width>
+         <height>16777215</height>
+        </size>
+       </property>
+       <property name="baseSize">
+        <size>
+         <width>0</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="font">
+        <font>
+         <pointsize>9</pointsize>
+        </font>
+       </property>
+       <property name="layoutDirection">
+        <enum>Qt::LeftToRight</enum>
+       </property>
+       <property name="text">
+        <string>Температура 1: --.- °C</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
    </item>
    <item>
     <spacer name="verticalSpacer">

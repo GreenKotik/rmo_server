@@ -35,7 +35,7 @@ EnergoWidget::~EnergoWidget()
 
 QSize EnergoWidget::documentFixedSize() const
 {
-    return QSize(340, 380);
+    return QSize(475, 174);
 }
 
 void EnergoWidget::onFieldChanged()

@@ -45,7 +45,7 @@ public:
         auto data = std::make_shared<TemperaturaData>(m_deviceId);
 
         // ✅ Имитация получения температуры (случайное значение от 15 до 35°C)
-        data->dTemperatura = 15.0 + QRandomGenerator::global()->bounded(20.0);
+//        data->dTemperatura = 15.0 + QRandomGenerator::global()->bounded(20.0);
 
         // ✅ Имитация проверки ошибок (10% шанс аварии)
         if (QRandomGenerator::global()->bounded(10) == 0) {

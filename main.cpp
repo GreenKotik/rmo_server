@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QCoreApplication>
 #include <QDebug>
+#include <QSqlDatabase>
 #include "devicedata.h"
 #include <memory>
 
@@ -14,6 +15,10 @@ int main(int argc, char *argv[])
     qDebug() << "[Main] Запуск приложения...";
     QCoreApplication::setAttribute(Qt::AA_DisableWindowContextHelpButton);
     QApplication a(argc, argv);
+
+    // Проверка доступных драйверов:
+    qDebug() << "Available SQL drivers:" << QSqlDatabase::drivers();
+    qDebug() << "Library paths:" << QCoreApplication::libraryPaths();
 
     // ✅ РЕГИСТРАЦИЯ МЕТАТИПОВ для передачи между потоками
     qRegisterMetaType<std::shared_ptr<IDeviceData>>("std::shared_ptr<IDeviceData>");

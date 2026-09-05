@@ -1349,9 +1349,9 @@ QStringList MainWindow::getEquipmentConnectionNames(DocType type)
                 << "Энкодер угла места";
         case DocType::Transmitter:
             return QStringList()
-                << "Усилитель \"А\""
-                << "Усилитель \"В\""
-                << "Усилитель \"С\""
+                << "Усилитель мощности \"А\""
+                << "Усилитель мощности \"В\""
+                << "Усилитель мощности \"С\""
                 << "Переключатель УМ"
                 << "UP/C основной 1"
                 << "UP/C основной 2"
@@ -1364,8 +1364,8 @@ QStringList MainWindow::getEquipmentConnectionNames(DocType type)
         case DocType::Modulator:
             return QStringList()
                 << "Усилитель-распределитель"
-                << "Модулятор 1"
-                << "Модулятор 2"
+                << "Спутниковый модулятор 1"
+                << "Спутниковый модулятор 2"
                 << "Переключатель резервирования"
                 << "Анализатор потока";
         case DocType::Energo:
@@ -1503,7 +1503,31 @@ QList<QPair<QString, int>> MainWindow::getEquipmentListForRow(DocType type, int 
             }
             break;
         case DocType::Modulator:
-            result << qMakePair(QString("Модулятор (не выбран)"), ID_UNKNOWN);
+            switch (rowIndex) {
+            case 0: // Усилитель-распределитель
+                result << qMakePair(QString("(Не выбран)"), ID_UNKNOWN);
+                break;
+            case 1: // Спутниковый модулятор 1
+            case 2: // Спутниковый модулятор 2
+                result << qMakePair(QString("Enensess-XSSR-VYP0-3001"), ID_MOD_ENENSESS_XSSR);
+                result << qMakePair(QString("Teleteh TT-MC-72"), ID_MOD_TELETEH_TT_MC_72);
+                result << qMakePair(QString("Sencore SDM 989"), ID_MOD_SENCORE_SDM_989);
+                result << qMakePair(QString("Newtec M 6100"), ID_MOD_NEWTEC_M_6100);
+                result << qMakePair(QString("Newtec Az 110"), ID_MOD_NEWTEC_AZ_110);
+                break;
+            case 3: // Переключатель резервирования
+                result << qMakePair(QString("Newtec SW Az 210"), ID_MOD_SW_NEWTEC_AZ_210);
+                result << qMakePair(QString("Dev-SW"), ID_MOD_SW_DEV);
+                result << qMakePair(QString("Enensess-Dev-SW"), ID_MOD_SW_ENENSESS);
+                result << qMakePair(QString("Newtec SW 0212"), ID_MOD_SW_NEWTEC_0212);
+                break;
+            case 4: // Анализатор потока
+                result << qMakePair(QString("(Не выбран)"), ID_UNKNOWN);
+                break;
+            default:
+                result << qMakePair(QString("Устройство (не выбрано)"), ID_UNKNOWN);
+                break;
+            }
             break;
         case DocType::Energo:
             result << qMakePair(QString("Оборудование (не выбрано)"), ID_UNKNOWN);

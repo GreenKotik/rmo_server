@@ -244,23 +244,20 @@ bool BaseDocWidget::loadFromFilePreserveSections(const QString &filePath)
         // ✅ 2. НОВОЕ: Инициализация планировщика опроса (если ещё не создан)
         if (!m_pollScheduler) {
             m_pollScheduler = new PollScheduler(this, this);
-
             // Подключаем сигналы
             connect(m_pollScheduler, &PollScheduler::pollResult,
                     this, &BaseDocWidget::processPollResult);
-
+            // ✅ Подключаем сигнал завершения цикла к обновлению UI
             connect(m_pollScheduler, &PollScheduler::allCyclesFinished,
-                    this, [this]() {
-            });
-
+                    this, &BaseDocWidget::updateUIFromBuffer,
+                    Qt::QueuedConnection); // Гарантированно в главном потоке
             connect(m_pollScheduler, &PollScheduler::errorOccurred,
                     this, [this](int chainId, int deviceIndex, const QString &error) {
-                qWarning() << "[BaseDocWidget] Ошибка опроса:"
-                           << "chainId:" << chainId
-                           << "deviceIndex:" << deviceIndex
-                           << "error:" << error;
-            });
-
+                        qWarning() << "[BaseDocWidget] Ошибка опроса:"
+                                   << "chainId:" << chainId
+                                   << "deviceIndex:" << deviceIndex
+                                   << "error:" << error;
+                    });
             qDebug() << "[BaseDocWidget] PollScheduler создан для:" << filePath;
         }
 
@@ -804,4 +801,72 @@ bool BaseDocWidget::isFastPolling() const
 {
     if (!m_pollScheduler) return false;
     return m_pollScheduler->isFastMode();
+}
+
+// ============================================================================
+// ✅ НОВЫЙ МЕТОД: Конвертация "сырых" данных в унифицированную TemperaturaData
+// ============================================================================
+std::shared_ptr<TemperaturaData> BaseDocWidget::convertToTemperatureData(
+    int deviceId,
+    const std::shared_ptr<IDeviceData>& rawData) const
+{
+    if (!rawData) return nullptr;
+
+    auto result = std::make_shared<TemperaturaData>(deviceId);
+
+    // ✅ Случай 1: Данные от Boreas 3 (4 датчика)
+    if (auto boreasData = std::dynamic_pointer_cast<Boreas3Data>(rawData)) {
+        result->activeCount = 4;
+        for (int i = 0; i < 4; ++i) {
+            result->temperatures[i] = boreasData->temperatures[i];
+            result->alarms[i] = boreasData->alarms[i];
+        }
+        // Копируем ошибки
+        result->errors = boreasData->errors;
+        return result;
+    }
+
+    // ✅ Случай 2: Данные от TE Monitor V6 (8 датчиков)
+    if (auto teData = std::dynamic_pointer_cast<TEMonitorV6Data>(rawData)) {
+        result->activeCount = 8;
+        for (int i = 0; i < 8; ++i) {
+            result->temperatures[i] = teData->temperatures[i];
+            // Распаковываем битовую маску в массив статусов
+            result->alarms[i] = (teData->alarmStatus >> i) & 0x01;
+        }
+        // Копируем ошибки
+        result->errors = teData->errors;
+        return result;
+    }
+
+    // ✅ Случай 3: Неизвестный тип драйвера
+    qWarning() << "[BaseDocWidget] convertToTemperatureData: неизвестный тип данных для deviceId:" << deviceId;
+    return nullptr;
+}
+
+// ============================================================================
+// ✅ НОВЫЙ МЕТОД: Получить унифицированные данные температуры для слота
+// ============================================================================
+std::shared_ptr<TemperaturaData> BaseDocWidget::getTemperatureDataForSlot(int slotIndex) const
+{
+    // 1. Проверка корректности индекса
+    if (slotIndex < 0 || slotIndex >= m_equipmentConnections.size()) {
+        qWarning() << "[BaseDocWidget] getTemperatureDataForSlot: некорректный slotIndex:" << slotIndex;
+        return nullptr;
+    }
+
+    // 2. Получаем deviceId из слота
+    const EquipmentConnection &conn = m_equipmentConnections[slotIndex];
+    if (conn.deviceId == ID_UNKNOWN) {
+        return nullptr;  // Устройство не выбрано
+    }
+
+    // 3. Получаем "сырые" данные из буфера
+    auto rawData = getDeviceData(conn.deviceId);
+    if (!rawData) {
+        return nullptr;  // Данные ещё не получены
+    }
+
+    // 4. Конвертируем в унифицированный формат
+    return convertToTemperatureData(conn.deviceId, rawData);
 }

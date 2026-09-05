@@ -116,9 +116,16 @@ struct PeredatchikData : public IDeviceData {
 };
 
 // --- 2. Данные датчика температуры (аналог StructDataTemperatura) ---
+// --- Унифицированные данные температуры (для Boreas 3 и TE Monitor V6) ---
 struct TemperaturaData : public IDeviceData {
     int m_deviceId;
-    double dTemperatura = 0.0;
+
+    // ✅ Расширено до 8 датчиков (максимум для TE Monitor V6)
+    // Для Boreas 3 используются только индексы 0-3
+    double temperatures[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    int alarms[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // Статус каждого датчика
+    int activeCount = 0;  // Количество активных датчиков (4 для Boreas, 8 для TE Monitor)
+
     DeviceErrors errors;
 
     TemperaturaData(int deviceId) : m_deviceId(deviceId) {}
@@ -126,19 +133,89 @@ struct TemperaturaData : public IDeviceData {
     int deviceId() const override { return m_deviceId; }
     bool hasErrors() const override { return errors.count > 0; }
     DeviceErrors getErrors() const override { return errors; }
+
     void setConnectionError() override {
         errors.addCode(250);
     }
 
-   QJsonObject toJson() const override {
+    QJsonObject toJson() const override {
         QJsonObject obj;
         obj["deviceId"] = m_deviceId;
-        obj["temperature"] = dTemperatura;
-
+        obj["activeCount"] = activeCount;
+        QJsonArray tempArray;
+        QJsonArray alarmArray;
+        for (int i = 0; i < activeCount; ++i) {
+            tempArray.append(temperatures[i]);
+            alarmArray.append(alarms[i]);
+        }
+        obj["temperatures"] = tempArray;
+        obj["alarms"] = alarmArray;
         QJsonArray errArray;
         for (int code : errors.codes) errArray.append(code);
         obj["errors"] = errArray;
+        return obj;
+    }
+};
 
+// --- Данные датчика температуры Boreas 3 (4 датчика + 4 статуса) ---
+struct Boreas3Data : public IDeviceData {
+    int m_deviceId;
+    double temperatures[4] = {0.0, 0.0, 0.0, 0.0};
+    int alarms[4] = {0, 0, 0, 0};
+    DeviceErrors errors;
+
+    Boreas3Data(int deviceId) : m_deviceId(deviceId) {}
+
+    int deviceId() const override { return m_deviceId; }
+    bool hasErrors() const override { return errors.count > 0; }
+    DeviceErrors getErrors() const override { return errors; }
+
+    void setConnectionError() override {
+        errors.addCode(250);
+    }
+    QJsonObject toJson() const override {
+        QJsonObject obj;
+        obj["deviceId"] = m_deviceId;
+        QJsonArray tempArray;
+        for (int i = 0; i < 4; ++i) tempArray.append(temperatures[i]);
+        obj["temperatures"] = tempArray;
+        QJsonArray alarmArray;
+        for (int i = 0; i < 4; ++i) alarmArray.append(alarms[i]);
+        obj["alarms"] = alarmArray;
+        QJsonArray errArray;
+        for (int code : errors.codes) errArray.append(code);
+        obj["errors"] = errArray;
+        return obj;
+    }
+};
+
+// --- Данные датчика температуры TE Monitor V6 (8 датчиков + битовая маска аварий) ---
+struct TEMonitorV6Data : public IDeviceData {
+    int m_deviceId;
+    double temperatures[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    int alarmStatus = 0;  // Битовая маска: бит i = датчик i+1
+    DeviceErrors errors;
+
+    TEMonitorV6Data(int deviceId) : m_deviceId(deviceId) {}
+
+    int deviceId() const override { return m_deviceId; }
+    bool hasErrors() const override { return errors.count > 0; }
+    DeviceErrors getErrors() const override { return errors; }
+
+    void setConnectionError() override {
+        errors.addCode(250);
+    }
+
+    QJsonObject toJson() const override {
+        QJsonObject obj;
+        obj["deviceId"] = m_deviceId;
+        QJsonArray tempArray;
+        for (int i = 0; i < 8; ++i) tempArray.append(temperatures[i]);
+        obj["temperatures"] = tempArray;
+        obj["alarmStatus"] = alarmStatus;
+        QJsonArray errArray;
+        for (int code : errors.codes) errArray.append(code);
+        obj["errors"] = errArray;
         return obj;
     }
 };
@@ -218,31 +295,29 @@ struct UPData : public IDeviceData {
     }
 };
 
-// --- Данные датчика температуры Boreas 3 (4 датчика + 4 статуса) ---
-struct Boreas3Data : public IDeviceData {
+
+// --- Данные модулятора Teleteh TT-MC-72 ---
+struct TeletehData : public IDeviceData {
     int m_deviceId;
-    double temperatures[4] = {0.0, 0.0, 0.0, 0.0};
-    int alarms[4] = {0, 0, 0, 0};
+    double outputPower = 0.0;   // Выходная мощность (dBm)
+    double frequency = 0.0;     // Частота (MHz)
+    int status = 0;             // 0 = OK, 1 = Alarm
     DeviceErrors errors;
 
-    Boreas3Data(int deviceId) : m_deviceId(deviceId) {}
+    TeletehData(int deviceId) : m_deviceId(deviceId) {}
 
     int deviceId() const override { return m_deviceId; }
     bool hasErrors() const override { return errors.count > 0; }
     DeviceErrors getErrors() const override { return errors; }
 
-    void setConnectionError() override {
-        errors.addCode(250);
-    }
+    void setConnectionError() override { errors.addCode(250); }
+
     QJsonObject toJson() const override {
         QJsonObject obj;
         obj["deviceId"] = m_deviceId;
-        QJsonArray tempArray;
-        for (int i = 0; i < 4; ++i) tempArray.append(temperatures[i]);
-        obj["temperatures"] = tempArray;
-        QJsonArray alarmArray;
-        for (int i = 0; i < 4; ++i) alarmArray.append(alarms[i]);
-        obj["alarms"] = alarmArray;
+        obj["outputPower"] = outputPower;
+        obj["frequency"] = frequency;
+        obj["status"] = status;
         QJsonArray errArray;
         for (int code : errors.codes) errArray.append(code);
         obj["errors"] = errArray;
@@ -250,14 +325,63 @@ struct Boreas3Data : public IDeviceData {
     }
 };
 
-// --- Данные датчика температуры TE Monitor V6 (8 датчиков + битовая маска аварий) ---
-struct TEMonitorV6Data : public IDeviceData {
+// --- Данные переключателя Dev-SW ---
+struct DevSwData : public IDeviceData {
     int m_deviceId;
-    double temperatures[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-    int alarmStatus = 0;  // Битовая маска: бит i = датчик i+1
+    int activePath = 0;         // 1 = Путь А, 2 = Путь Б
+    int status = 0;             // 0 = OK, 1 = Alarm
     DeviceErrors errors;
 
-    TEMonitorV6Data(int deviceId) : m_deviceId(deviceId) {}
+    DevSwData(int deviceId) : m_deviceId(deviceId) {}
+
+    int deviceId() const override { return m_deviceId; }
+    bool hasErrors() const override { return errors.count > 0; }
+    DeviceErrors getErrors() const override { return errors; }
+
+    void setConnectionError() override { errors.addCode(250); }
+
+    QJsonObject toJson() const override {
+        QJsonObject obj;
+        obj["deviceId"] = m_deviceId;
+        obj["activePath"] = activePath;
+        obj["status"] = status;
+        QJsonArray errArray;
+        for (int code : errors.codes) errArray.append(code);
+        obj["errors"] = errArray;
+        return obj;
+    }
+};
+
+
+// --- Данные модулятора (Enensess/Teleteh/Newtec/Sencore) ---
+struct ModulatorData : public IDeviceData {
+    int m_deviceId;
+
+    // Монитор 1
+    double usefulBitRate1 = 0.0;    // Mbit/s
+    double totalBitRate1 = 0.0;     // Mbit/s
+    double outputLevel1 = 0.0;      // dBm
+    bool asiSyncLost1 = false;
+    bool rfOutputOk1 = false;
+
+    // Монитор 2
+    double usefulBitRate2 = 0.0;    // Mbit/s
+    double totalBitRate2 = 0.0;     // Mbit/s
+    double outputLevel2 = 0.0;      // dBm
+    bool asiSyncLost2 = false;
+    bool rfOutputOk2 = false;
+
+    // Переключатель (SW)
+    enum class SwMode { Unknown, Local, Remote, Auto };
+    SwMode swMode = SwMode::Unknown;
+    int activeModulator = 0;        // 1 или 2
+    bool power1On = false;
+    bool power2On = false;
+    bool swFault = false;
+
+    DeviceErrors errors;
+
+    ModulatorData(int deviceId) : m_deviceId(deviceId) {}
 
     int deviceId() const override { return m_deviceId; }
     bool hasErrors() const override { return errors.count > 0; }
@@ -270,10 +394,21 @@ struct TEMonitorV6Data : public IDeviceData {
     QJsonObject toJson() const override {
         QJsonObject obj;
         obj["deviceId"] = m_deviceId;
-        QJsonArray tempArray;
-        for (int i = 0; i < 8; ++i) tempArray.append(temperatures[i]);
-        obj["temperatures"] = tempArray;
-        obj["alarmStatus"] = alarmStatus;
+        obj["usefulBitRate1"] = usefulBitRate1;
+        obj["totalBitRate1"] = totalBitRate1;
+        obj["outputLevel1"] = outputLevel1;
+        obj["asiSyncLost1"] = asiSyncLost1;
+        obj["rfOutputOk1"] = rfOutputOk1;
+        obj["usefulBitRate2"] = usefulBitRate2;
+        obj["totalBitRate2"] = totalBitRate2;
+        obj["outputLevel2"] = outputLevel2;
+        obj["asiSyncLost2"] = asiSyncLost2;
+        obj["rfOutputOk2"] = rfOutputOk2;
+        obj["swMode"] = static_cast<int>(swMode);
+        obj["activeModulator"] = activeModulator;
+        obj["power1On"] = power1On;
+        obj["power2On"] = power2On;
+        obj["swFault"] = swFault;
         QJsonArray errArray;
         for (int code : errors.codes) errArray.append(code);
         obj["errors"] = errArray;
@@ -287,7 +422,7 @@ struct TEMonitorV6Data : public IDeviceData {
 inline std::shared_ptr<IDeviceData> createDeviceData(int deviceId)
 {
     // Используем макросы из deviceids.h для определения категории
-    if (IS_TRANSMITTER(deviceId) || IS_TX_SWITCH(deviceId)) {
+/*    if (IS_TRANSMITTER(deviceId) || IS_TX_SWITCH(deviceId)) {
         return std::make_shared<PeredatchikData>(deviceId);
     }
     if (IS_TEMP_SENSOR(deviceId) || IS_TEMP_RECEIVER(deviceId)) {
@@ -299,7 +434,7 @@ inline std::shared_ptr<IDeviceData> createDeviceData(int deviceId)
     if (IS_UP_CONVERTER(deviceId) || IS_UPC_SWITCH(deviceId)) {
         return std::make_shared<UPData>(deviceId);
     }
-
+*/
     if (deviceId == ID_TEMP_SNS_BOREAS_3) {
         return std::make_shared<Boreas3Data>(deviceId);
     }

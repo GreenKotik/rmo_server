@@ -2,64 +2,83 @@
 #define ALARMPANEL_H
 
 #include <QWidget>
-#include <QVBoxLayout>
-#include <QLabel>
-#include <QScrollArea>
+#include <QVector>
 #include <QDateTime>
-#include <QList>
-#include <QColor>
+#include <QAbstractListModel>
+#include <QStyledItemDelegate>
+#include <QListView>
 
-// ============================================================================
-// ✅ СТРУКТУРА ДЛЯ ХРАНЕНИЯ ОДНОЙ АВАРИИ
-// ============================================================================
+// Структура AlarmEntry должна быть доступна везде
 struct AlarmEntry {
-    int code;
-    int status;
+    int code = 0;
+    int status = 0; // 0: Info, 1: Critical, 2: Command
     QString message;
     QDateTime timestamp;
-    int deviceId;
+    int deviceId = 0;
 };
 
-// ============================================================================
-// ✅ ВИДЖЕТ ПАНЕЛИ АВАРИЙ (визуальное продолжение окна документа)
-// ============================================================================
+// *** МОДЕЛЬ ДАННЫХ ***
+class AlarmListModel : public QAbstractListModel
+{
+    Q_OBJECT
+public:
+    enum Roles { CodeRole = Qt::UserRole + 1, StatusRole, MessageRole, TimeRole };
+
+    explicit AlarmListModel(QObject *parent = nullptr);
+
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
+    QHash<int, QByteArray> roleNames() const override;
+
+    void setAlarms(const QList<AlarmEntry> &alarms);
+    int criticalAlarmCount() const;
+
+private:
+    QVector<AlarmEntry> m_alarms;
+};
+
+// *** ДЕЛЕГАТ ОТДИЗАЙНА ***
+class AlarmItemDelegate : public QStyledItemDelegate
+{
+    Q_OBJECT
+public:
+    explicit AlarmItemDelegate(QObject *parent = nullptr);
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override;
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override;
+
+//private:
+    static constexpr int ROW_HEIGHT = 24;
+};
+
+// *** ОСНОВНОЙ ВИДЖЕТ ПАНЕЛИ ***
 class AlarmPanel : public QWidget
 {
     Q_OBJECT
 public:
     explicit AlarmPanel(QWidget *parent = nullptr);
+    ~AlarmPanel();
 
-    // ✅ Полное обновление списка аварий
     void setAlarms(const QList<int> &codes, const QList<int> &statuses);
-
-    // ✅ Очистить все аварии
     void clearAlarms();
-
-    // ✅ Получить количество активных аварий (Status=1)
     int criticalAlarmCount() const;
-
-    // ✅ Рассчитать высоту панели на основе количества аварий
     int calculateHeight() const;
-
-    // ✅ Константа: высота одной строки аварии
-    static constexpr int ROW_HEIGHT = 24;
-
-    // ✅ Максимальная высота панели (чтобы не сломать интерфейс)
-    static constexpr int MAX_HEIGHT = 300;
 
 signals:
     void alarmCountChanged(int count);
 
 private:
-    void updateDisplay();
-    void rebuildAlarmList();
-    QColor getAlarmColor(int status) const;
+    // UI элементы нового типа
+    QListView *m_alarmView = nullptr;
 
-    QVBoxLayout *m_mainLayout;
-    QWidget *m_alarmContainer;
-    QVBoxLayout *m_alarmLayout;
+    // Data Layer
+    AlarmListModel *m_model = nullptr;
+    AlarmItemDelegate *m_delegate = nullptr;
 
-    QList<AlarmEntry> m_alarms;
+    static constexpr int MAX_HEIGHT = 300;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;;
 };
+
 
 #endif // ALARMPANEL_H

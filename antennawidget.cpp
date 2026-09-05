@@ -34,7 +34,7 @@ AntennaWidget::~AntennaWidget()
 
 QSize AntennaWidget::documentFixedSize() const
 {
-    return QSize(320, 380);
+    return QSize(475, 174);
 }
 
 void AntennaWidget::onFieldChanged()

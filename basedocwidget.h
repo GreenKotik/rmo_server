@@ -163,6 +163,9 @@ public:
         QReadLocker locker(&m_dataLock);
         return m_lastDeviceData.value(deviceId);
     }
+    // ✅ НОВОЕ: Получить унифицированные данные температуры для указанного слота
+    // slotIndex — индекс строки в m_equipmentConnections (например, 11 для "Температура")
+    std::shared_ptr<TemperaturaData> getTemperatureDataForSlot(int slotIndex) const;
 
 signals:
     void modifiedChanged(bool);
@@ -211,10 +214,19 @@ protected:
     void updateAlarmState();      // Обновление цвета заголовка на основе аварий
     void triggerIndicatorBlink(); // Мигание индикатора на 300 мс
 
+    // ✅ НОВЫЙ МЕТОД: Обновление UI из буфера после завершения цикла опроса
+    virtual void updateUIFromBuffer() {
+        // Базовая реализация пустая, переопределяется в наследниках (например, PeredatchikWidget)
+    }
+
 private:
     // ✅ ОБЪЯВЛЕНИЯ МЕТОДОВ ПРОВЕРКИ
     void loadAndValidateEquipmentConnections();
     void writeEquipmentErrorLog();
+    // ✅ НОВОЕ: Конвертер "сырых" данных драйвера в унифицированную TemperaturaData
+    std::shared_ptr<TemperaturaData> convertToTemperatureData(
+        int deviceId,
+        const std::shared_ptr<IDeviceData>& rawData) const;
 
 private slots:
     void onDocNewConnection();

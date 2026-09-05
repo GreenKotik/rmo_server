@@ -8,6 +8,8 @@
 #include "temperaturedriver.h"
 #include "boreas3driver.h"  // ✅ ДОБАВИТЬ
 #include "temonitorv6driver.h"
+#include "teletehdriver.h"
+#include "devswdriver.h"
 
 // ============================================================================
 // ✅ ФАБРИКА ДРАЙВЕРОВ УСТРОЙСТВ
@@ -15,26 +17,25 @@
 class DriverFactory
 {
 public:
-    // ✅ Создать драйвер по deviceId
     static std::unique_ptr<IDeviceDriver> createDriver(int deviceId, QObject *parent = nullptr)
     {
-        // ✅ Драйвер Boreas 3 (SNMP)
-        if (deviceId == ID_TEMP_SNS_BOREAS_3) {
-            return std::make_unique<Boreas3Driver>(deviceId, parent);
-        }
+        switch (deviceId) {
+            case  ID_TEMP_SNS_BOREAS_3:
+                return std::make_unique<Boreas3Driver>(deviceId, parent);
 
-        // ✅ Тестовый драйвер для датчиков температуры
-        if (IS_TEMP_SENSOR(deviceId) || IS_TEMP_RECEIVER(deviceId)) {
-            return std::make_unique<TemperatureDriver>(deviceId, parent);
-        }
-        if (deviceId == ID_TEMP_SNS_TE_MONITOR_V6) {
-            return std::make_unique<TEMonitorV6Driver>(deviceId, parent);
-        }
+            case  ID_TEMP_SNS_TE_MONITOR_V6:
+                return std::make_unique<TEMonitorV6Driver>(deviceId, parent);
 
-        // TODO: Добавить остальные драйверы по мере реализации
-        qWarning() << "[DriverFactory] Драйвер для deviceId" << deviceId
-                   << "ещё не реализован.";
-        return nullptr;
+            case ID_MOD_TELETEH_TT_MC_72:
+                return std::make_unique<TeletehDriver>(deviceId, parent);
+
+            case ID_MOD_SW_DEV:
+                return std::make_unique<DevSwDriver>(deviceId, parent);
+
+            default:
+                qWarning() << "[DriverFactory] Драйвер для deviceId" << deviceId << "ещё не реализован.";
+                return nullptr;
+        }
     }
 
     // ✅ Получить название категории устройства
