@@ -37,6 +37,7 @@ SOURCES += \
     alarmregistry.cpp \
     boreas3driver.cpp \
     changepassworddialog.cpp \
+    commandconfirmdialog.cpp \
     devswdriver.cpp \
     equipmentconfigdialog.cpp \
     equipmentsettingsdialog.cpp \
@@ -44,6 +45,9 @@ SOURCES += \
     main.cpp \
     mainwindow.cpp \
     modbusclient.cpp \
+    modulatorcontroldialog.cpp \
+    modulatortab.cpp \
+    modulatortabbase.cpp \
     networkcontroller.cpp \
     basedocwidget.cpp \
     antennawidget.cpp \
@@ -56,6 +60,8 @@ SOURCES += \
     databasemanager.cpp \
     serialportclient.cpp \
     snmpclient.cpp \
+    stubtab.cpp \
+    switchtab.cpp \
     tcpasciiclient.cpp \
     teletehdriver.cpp \
     temonitorv6driver.cpp
@@ -67,9 +73,11 @@ HEADERS += \
     authrequireddialog.h \
     boreas3driver.h \
     changepassworddialog.h \
+    commandconfirmdialog.h \
     connectionparamsdialog.h \
     databaseconfigdialog.h \
     databaseinitwizard.h \
+    databuffer.h \
     devicedata.h \
     deviceids.h \
     devswdriver.h \
@@ -80,6 +88,9 @@ HEADERS += \
     ledindicator.h \
     mainwindow.h \
     modbusclient.h \
+    modulatorcontroldialog.h \
+    modulatortab.h \
+    modulatortabbase.h \
     networkcontroller.h \
     basedocwidget.h \
     antennawidget.h \
@@ -94,6 +105,8 @@ HEADERS += \
     serialportclient.h \
     serverclientconfigdialog.h \
     snmpclient.h \
+    stubtab.h \
+    switchtab.h \
     tcpasciiclient.h \
     teletehdriver.h \
     temonitorv6driver.h \
@@ -102,7 +115,10 @@ HEADERS += \
 
 FORMS += \
     antennaform.ui \
+    modulatortab.ui \
     peredatchikform.ui \
     modulatorform.ui \
     energoform.ui \
-    screenconfigdialog.ui
+    screenconfigdialog.ui \
+    stubtab.ui \
+    switchtab.ui

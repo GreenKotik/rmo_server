@@ -14,6 +14,7 @@
 #include <QRandomGenerator>
 #include <algorithm>  // ✅ ДОБАВИТЬ для std::sort
 
+
 // ============================================================================
 // ✅ СТРУКТУРА ДЛЯ ХРАНЕНИЯ ИНФОРМАЦИИ О ПОЛЬЗОВАТЕЛЕ
 // ============================================================================
@@ -444,6 +445,12 @@ public:
     QString getCurrentUserRole() const { return m_currentUserRole; }
     void setCurrentUserRole(const QString &role) { m_currentUserRole = role; }
 
+    // ✅ НОВОЕ: Проверка и создание таблицы для данных документа
+    bool ensureDocumentTableExists(const QString &tableName, int docType);
+    void migrateTableIfNeeded(const QString &safeTableName, int docType);
+    // ✅ НОВОЕ: Запись данных опроса в таблицу документа
+    // data - QJsonObject, содержащий пары "Имя_поля": значение
+    bool logDocumentData(const QString &tableName, int docType, const QJsonObject &data);
 
 private:
     DatabaseManager() = default;

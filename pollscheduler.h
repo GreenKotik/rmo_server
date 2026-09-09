@@ -51,6 +51,8 @@ public:
     bool isFastMode() const { return m_fastMode; }
 
 signals:
+    // ✅ НОВЫЙ СИГНАЛ: Начало цикла опроса (для синхронного мигания индикаторов)
+    void cycleStarted();
     // ✅ Результат опроса устройства
     void pollResult(int chainId, int deviceIndex, std::shared_ptr<IDeviceData> data);
 

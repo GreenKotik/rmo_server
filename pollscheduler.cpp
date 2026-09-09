@@ -295,6 +295,9 @@ void PollScheduler::sendCommand(const QString &deviceName, const ControlCommand 
 
 void PollScheduler::startPollCycle()
 {
+    // ✅ НОВОЕ: Сигналим о начале цикла опроса
+    emit cycleStarted();
+
     // ✅ Запускаем Fast Pool (если в нём есть цепочки)
     if (!m_fastChains.empty()) {
         m_fastActiveChains = m_fastChains.size();

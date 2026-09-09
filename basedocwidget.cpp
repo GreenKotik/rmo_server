@@ -1,4 +1,5 @@
 #include "basedocwidget.h"
+#include "databasemanager.h"  // Добавьте в начало файла
 #include "mainwindow.h"       // Для доступа к MainWindow и getEquipmentConnectionNames
 #include <QFile>
 #include <QJsonDocument>
@@ -247,6 +248,9 @@ bool BaseDocWidget::loadFromFilePreserveSections(const QString &filePath)
             // Подключаем сигналы
             connect(m_pollScheduler, &PollScheduler::pollResult,
                     this, &BaseDocWidget::processPollResult);
+            // ✅ НОВОЕ: Проксируем сигнал начала цикла
+            connect(m_pollScheduler, &PollScheduler::cycleStarted,
+                    this, &BaseDocWidget::pollCycleStarted);
             // ✅ Подключаем сигнал завершения цикла к обновлению UI
             connect(m_pollScheduler, &PollScheduler::allCyclesFinished,
                     this, &BaseDocWidget::updateUIFromBuffer,
@@ -287,6 +291,10 @@ bool BaseDocWidget::loadFromFilePreserveSections(const QString &filePath)
         setDocumentParameters(m_fullDocument.value("parameters").toObject());
 
         qDebug() << "[BaseDocWidget] Загружен файл и запущен опрос:" << filePath;
+
+        // ✅ НОВОЕ: Автоматическое создание таблицы в БД
+        ensureDatabaseTable();
+
         return true;
     }
     return false;
@@ -869,4 +877,42 @@ std::shared_ptr<TemperaturaData> BaseDocWidget::getTemperatureDataForSlot(int sl
 
     // 4. Конвертируем в унифицированный формат
     return convertToTemperatureData(conn.deviceId, rawData);
+}
+
+
+int BaseDocWidget::databaseDocTypeCode() const
+{
+    // Маппинг DocType → int код для БД (как в MFC)
+    // 1 = Антенна, 2 = Передатчик, 3 = Энерго, 4 = Модулятор
+    switch (docType()) {
+        case DocType::Antenna:     return 1;
+        case DocType::Transmitter: return 2;
+        case DocType::Energo:      return 3;
+        case DocType::Modulator:   return 4;
+        default:                   return 0;
+    }
+}
+
+void BaseDocWidget::ensureDatabaseTable()
+{
+    if (m_filePath.isEmpty()) return;
+
+    int code = databaseDocTypeCode();
+    if (code == 0) {
+        qWarning() << "[DB] Неизвестный тип документа, таблица не создана.";
+        return;
+    }
+
+    QString tableName = QFileInfo(m_filePath).completeBaseName();
+    if (tableName.isEmpty()) return;
+
+    qDebug() << "[DB] Попытка создания таблицы:" << tableName
+             << "для docType =" << code;
+
+    bool result = DatabaseManager::instance().ensureDocumentTableExists(tableName, code);
+    if (result) {
+        qDebug() << "[DB] Таблица" << tableName << "готова к работе.";
+    } else {
+        qWarning() << "[DB] Не удалось создать таблицу" << tableName;
+    }
 }

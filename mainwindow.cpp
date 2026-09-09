@@ -42,6 +42,14 @@ MainWindow::MainWindow(AppMode mode, const QJsonObject &clientConfig, QWidget *p
       m_mode(mode)
 {
     setCentralWidget(mdiArea);
+
+    // ✅ ЯВНО ВКЛЮЧАЕМ ПОЛОСЫ ПРОКРУТКИ ДЛЯ QMdiArea
+    mdiArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    mdiArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+    // ✅ ЗАПРЕЩАЕМ автоматическую максимизацию подокон, чтобы они не перекрывали скроллбары
+    mdiArea->setOption(QMdiArea::DontMaximizeSubWindowOnActivation, true);
+
     connect(mdiArea, &QMdiArea::subWindowActivated, this, &MainWindow::updateWindowTitle);
     loadAppConfig();
     updateWindowTitle();
@@ -1795,6 +1803,10 @@ void MainWindow::applyGridLayout()
                 columnOffset[col] += panelHeight + margin;
             }
         }
+    }
+    // ✅ НОВОЕ: Гарантируем обновление области прокрутки после изменения геометрии окон
+    if (mdiArea) {
+        mdiArea->viewport()->update();
     }
 }
 

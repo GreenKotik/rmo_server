@@ -1,4 +1,5 @@
 #include "antennawidget.h"
+#include "databasemanager.h"  // ✅ ДОБАВИТЬ ЭТУ СТРОКУ
 #include "ui_antennaform.h"
 
 #include <QFile>
@@ -60,6 +61,7 @@ void AntennaWidget::onApplyClicked()
 void AntennaWidget::loadFromFile(const QString &filePath)
 {
     // ✅ Используем новый метод, который сохраняет все секции
+
     loadFromFilePreserveSections(filePath);
 }
 

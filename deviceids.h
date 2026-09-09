@@ -194,6 +194,6 @@
 #define IS_CONTROL_POWER(id)            ((id) >= 1401 && (id) <= 1499)
 #define IS_MNEMOSCHEMA(id)              ((id) >= 1501 && (id) <= 1599)
 #define IS_MODULATOR(id)                ((id) >= 1601 && (id) <= 1699)
-#define IS_MODULATOR_SWITCH(id)         ((id) >= 1701 && (id) <= 1799)
+#define IS_MOD_SWITCH(id)               ((id) >= 1701 && (id) <= 1799)
 
 #endif // DEVICEIDS_H

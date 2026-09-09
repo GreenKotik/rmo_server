@@ -171,6 +171,8 @@ signals:
     void modifiedChanged(bool);
     // ✅ НОВЫЙ СИГНАЛ: Уведомление об изменении аварий в документе
     void alarmsUpdated(const QString &docPath, const QList<int> &alarmCodes, const QList<int> &alarmStatuses);
+    // ✅ НОВЫЙ СИГНАЛ: Начало цикла опроса (проксируется от PollScheduler)
+    void pollCycleStarted();
 
 protected:
     void setModified(bool m) {
@@ -218,6 +220,11 @@ protected:
     virtual void updateUIFromBuffer() {
         // Базовая реализация пустая, переопределяется в наследниках (например, PeredatchikWidget)
     }
+    // ✅ НОВОЕ: Автоматическое создание таблицы в БД при загрузке документа
+    void ensureDatabaseTable();
+
+    // ✅ НОВОЕ: Возвращает числовой код типа документа для БД
+    virtual int databaseDocTypeCode() const;
 
 private:
     // ✅ ОБЪЯВЛЕНИЯ МЕТОДОВ ПРОВЕРКИ
