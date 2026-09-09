@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+<class>StubTabForm</class>
+<widget class="QWidget" name="StubTabForm">
+<property name="geometry">
+<rect>
+<x>0</x>
+<y>0</y>
+<width>560</width>
+<height>320</height>
+</rect>
+</property>
+<property name="windowTitle">
+<string>Заглушка</string>
+</property>
+<layout class="QVBoxLayout" name="mainLayout">
+<property name="alignment">
+<set>Qt::AlignCenter</set>
+</property>
+<item>
+<spacer name="topSpacer">
+<property name="orientation">
+<enum>Qt::Vertical</enum>
+</property>
+<property name="sizeHint" stdset="0">
+<size>
+<width>20</width>
+<height>40</height>
+</size>
+</property>
+</spacer>
+</item>
+<item>
+<widget class="QLabel" name="labelTitle">
+<property name="font">
+<font>
+<pointsize>14</pointsize>
+<weight>75</weight>
+<bold>true</bold>
+</font>
+</property>
+<property name="styleSheet">
+<string notr="true">color: #005A9E;</string>
+</property>
+<property name="text">
+<string>Устройство</string>
+</property>
+<property name="alignment">
+<set>Qt::AlignCenter</set>
+</property>
+</widget>
+</item>
+<item>
+<widget class="QLabel" name="labelStub">
+<property name="font">
+<font>
+<pointsize>12</pointsize>
+</font>
+</property>
+<property name="styleSheet">
+<string notr="true">color: #757575; padding: 20px;</string>
+</property>
+<property name="text">
+<string>Нет доступных параметров</string>
+</property>
+<property name="alignment">
+<set>Qt::AlignCenter</set>
+</property>
+</widget>
+</item>
+<item>
+<spacer name="bottomSpacer">
+<property name="orientation">
+<enum>Qt::Vertical</enum>
+</property>
+<property name="sizeHint" stdset="0">
+<size>
+<width>20</width>
+<height>40</height>
+</size>
+</property>
+</spacer>
+</item>
+</layout>
+</widget>
+<resources/>
+<connections/>
+</ui>
