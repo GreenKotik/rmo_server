@@ -13,6 +13,7 @@
 #include <QList>
 #include <QRandomGenerator>
 #include <algorithm>  // ✅ ДОБАВИТЬ для std::sort
+#include <QFileInfo> // ✅ ДОБАВИТЬ
 
 
 // ============================================================================
@@ -446,11 +447,11 @@ public:
     void setCurrentUserRole(const QString &role) { m_currentUserRole = role; }
 
     // ✅ НОВОЕ: Проверка и создание таблицы для данных документа
-    bool ensureDocumentTableExists(const QString &tableName, int docType);
+    bool ensureDocumentTableExists(const QString &filePath, int docType);
+    bool logDocumentData(const QString &filePath, int docType, const QJsonObject &data);
     void migrateTableIfNeeded(const QString &safeTableName, int docType);
-    // ✅ НОВОЕ: Запись данных опроса в таблицу документа
-    // data - QJsonObject, содержащий пары "Имя_поля": значение
-    bool logDocumentData(const QString &tableName, int docType, const QJsonObject &data);
+    // ✅ НОВОЕ: Единая функция для получения безопасного имени таблицы
+    static QString getSafeTableName(const QString &filePath);
 
 private:
     DatabaseManager() = default;

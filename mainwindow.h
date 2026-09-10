@@ -186,6 +186,8 @@ public:
     QStringList getEquipmentConnectionNames(DocType type);
     QString getCurrentUser() const { return authComboBox->currentText(); }
     void forceAuthenticate(const QString &username);
+    // ✅ НОВОЕ: Получить текущий активный документ
+    BaseDocWidget* getCurrentDocument() const;
 
 private slots:
     void newAntenna();
@@ -214,6 +216,8 @@ private slots:
     void showServerClientConfig();
     void updateWindowTitle();
     void showDatabaseConfig();
+    // ✅ НОВОЕ: Открытие диалога просмотра данных
+    void onViewDataAction();
 
 private:
     void setupActions();

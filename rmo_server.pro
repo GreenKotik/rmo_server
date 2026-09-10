@@ -1,4 +1,5 @@
 QT       += core gui widgets network sql serialport
+QT += printsupport
 CONFIG   += c++17
 TARGET    = rmo_server
 TEMPLATE  = app
@@ -38,6 +39,7 @@ SOURCES += \
     boreas3driver.cpp \
     changepassworddialog.cpp \
     commandconfirmdialog.cpp \
+    dataviewdialog.cpp \
     devswdriver.cpp \
     equipmentconfigdialog.cpp \
     equipmentsettingsdialog.cpp \
@@ -55,6 +57,7 @@ SOURCES += \
     modulatorwidget.cpp \
     energowidget.cpp \
     pollscheduler.cpp \
+    qcustomplot.cpp \
     ringindicator.cpp \
     screenconfigdialog.cpp \
     databasemanager.cpp \
@@ -78,6 +81,7 @@ HEADERS += \
     databaseconfigdialog.h \
     databaseinitwizard.h \
     databuffer.h \
+    dataviewdialog.h \
     devicedata.h \
     deviceids.h \
     devswdriver.h \
@@ -99,6 +103,7 @@ HEADERS += \
     energowidget.h \
     pollchain.h \
     pollscheduler.h \
+    qcustomplot.h \
     ringindicator.h \
     screenconfigdialog.h \
     databasemanager.h \
@@ -115,6 +120,7 @@ HEADERS += \
 
 FORMS += \
     antennaform.ui \
+    dataviewdialog.ui \
     modulatortab.ui \
     peredatchikform.ui \
     modulatorform.ui \

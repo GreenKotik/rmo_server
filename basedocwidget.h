@@ -26,6 +26,7 @@
 #include "alarmregistry.h"   // ✅ Для AlarmRegistry
 
 class PollScheduler;  // ✅ Forward declaration вместо #include
+class DataViewDialog;  // ✅ Forward declaration
 
 enum class DocType { Antenna, Transmitter, Modulator, Energo };
 
@@ -40,7 +41,7 @@ struct EquipmentConnection {
     bool slowPool = false;
 
     // === Сетевые параметры ===
-    QString interface;            // Тип интерфейса: "TCP/IP", "SNMP", "Modbus TCP", "Modbus RTU", "RS-232", "RS-422", "RS-485"
+    QString connectionInterface;  // ✅ БЫЛО: interface
     QString ipAddress;            // IP-адрес (для TCP/SNMP/Modbus TCP)
     int port;                     // Порт (для TCP/SNMP/Modbus TCP)
 
@@ -69,7 +70,7 @@ struct EquipmentConnection {
           deviceId(ID_UNKNOWN),
           useStream(false),
           slowPool(false),
-          interface("TCP/IP"),
+          connectionInterface("TCP/IP"),
           port(502),
           snmpV1Enabled(false),
           snmpV1CommunityRead("public"),
@@ -240,6 +241,7 @@ private slots:
     void onDocClientReadyRead();
     void onDocClientDisconnected();
     void onDocHeartbeatTimeout();
+    void onViewDataGraph();  // ✅ Новый слот для открытия диалога
 
     static QByteArray serializePacket(const QJsonObject &obj);
     static bool parsePacket(QByteArray &buffer, QJsonObject &outObj);

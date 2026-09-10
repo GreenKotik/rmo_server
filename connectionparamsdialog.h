@@ -235,7 +235,7 @@ public:
     // ✅ Установить данные из структуры
     void setConnectionData(const EquipmentConnection &conn)
     {
-        interfaceCombo->setCurrentText(conn.interface);
+        interfaceCombo->setCurrentText(conn.connectionInterface);
         ipEdit->setText(conn.ipAddress);
         portSpin->setValue(conn.port);
 
@@ -272,7 +272,7 @@ public:
     EquipmentConnection getConnectionData() const
     {
         EquipmentConnection conn;
-        conn.interface = interfaceCombo->currentText();
+        conn.connectionInterface = interfaceCombo->currentText();
         conn.ipAddress = ipEdit->text();
         conn.port = portSpin->value();
 

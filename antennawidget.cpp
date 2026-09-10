@@ -120,5 +120,6 @@ QJsonObject AntennaWidget::getDocumentParameters() const
 
 void AntennaWidget::setDocumentParameters(const QJsonObject &params)
 {
+    Q_UNUSED(params);  // ✅ ДОБАВИТЬ
     // ✅ Устанавливаем параметры антенны
 }

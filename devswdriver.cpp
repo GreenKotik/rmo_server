@@ -72,6 +72,7 @@ std::shared_ptr<IDeviceData> DevSwDriver::poll()
 
 bool DevSwDriver::executeCommand(const ControlCommand &cmd)
 {
+    Q_UNUSED(cmd);  // ✅ Добавляем, чтобы убрать предупреждение
     // Пример: переключение пути (1 или 2)
 /*    if (cmd.commandName == "switchPath") {
         int targetPath = cmd.value.toInt();

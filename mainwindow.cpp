@@ -14,6 +14,7 @@
 #include "databaseconfigdialog.h"
 #include "databaseinitwizard.h"
 #include "alarmregistry.h"
+#include "dataviewdialog.h"
 #include <QSqlDatabase>
 #include <QMenuBar>
 #include <QMenu>
@@ -1880,4 +1881,41 @@ void MainWindow::removeAlarmPanelForDoc(const QString &docPath)
         m_alarmPanels.remove(docPath);
         applyGridLayout();
     }
+}
+
+
+void MainWindow::onViewDataAction()
+{
+    // Получаем текущий активный документ
+    BaseDocWidget *currentDoc = getCurrentDocument();
+    if (!currentDoc) {
+        QMessageBox::warning(this, "Ошибка", "Нет активного документа");
+        return;
+    }
+
+    int docType = 0;
+    switch (currentDoc->docType()) {
+        case DocType::Antenna:     docType = 1; break;
+        case DocType::Transmitter: docType = 2; break;
+        case DocType::Energo:      docType = 3; break;
+        case DocType::Modulator:   docType = 4; break;
+        default: return;
+    }
+
+    DataViewDialog *dlg = new DataViewDialog(currentDoc->filePath(), docType, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+}
+
+BaseDocWidget* MainWindow::getCurrentDocument() const
+{
+    // Получаем активное подокно из MDI-области
+    QMdiSubWindow *activeSubWindow = mdiArea ? mdiArea->activeSubWindow() : nullptr;
+    if (!activeSubWindow) return nullptr;
+
+    QWidget *widget = activeSubWindow->widget();
+    if (!widget) return nullptr;
+
+    // Приводим к BaseDocWidget
+    return qobject_cast<BaseDocWidget*>(widget);
 }

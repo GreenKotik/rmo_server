@@ -21,6 +21,7 @@
 #include "pollscheduler.h"   // ✅ Для PollScheduler
 #include "devicedata.h"      // ✅ Для IDeviceData
 #include "alarmregistry.h"   // ✅ Для AlarmRegistry
+#include "dataviewdialog.h"  // ✅ Добавляем после других includes
 
 BaseDocWidget::BaseDocWidget(QWidget *parent)
     : QWidget(parent),
@@ -377,7 +378,7 @@ void BaseDocWidget::loadAndValidateEquipmentConnections()
         conn.equipmentType = "";
         conn.deviceId = ID_UNKNOWN;  // ✅ НОВОЕ: по умолчанию неизвестно
         conn.useStream = false;
-        conn.interface = "TCP/IP";
+        conn.connectionInterface = "TCP/IP";
         conn.ipAddress = "";
         conn.port = 502;
         conn.snmpV1Enabled = false;
@@ -446,7 +447,7 @@ void BaseDocWidget::loadAndValidateEquipmentConnections()
         m_equipmentConnections[i].deviceId = connObj.value("deviceId").toInt(ID_UNKNOWN);  // ✅ НОВОЕ
         m_equipmentConnections[i].useStream = connObj.value("useStream").toBool(false);
         m_equipmentConnections[i].slowPool = connObj.value("slowPool").toBool(false);  // ✅ НОВОЕ
-        m_equipmentConnections[i].interface = connObj.value("interface").toString("TCP/IP");
+        m_equipmentConnections[i].connectionInterface = connObj.value("connectionInterface").toString("TCP/IP");
         m_equipmentConnections[i].ipAddress = connObj.value("ipAddress").toString();
         m_equipmentConnections[i].port = connObj.value("port").toInt(502);
         m_equipmentConnections[i].snmpV1Enabled = connObj.value("snmpV1Enabled").toBool(false);
@@ -582,6 +583,8 @@ void BaseDocWidget::contextMenuEvent(QContextMenuEvent *event)
         "}"
     );
 
+    // ✅ НОВОЕ: Пункт "Просмотр графика"
+    QAction *graphAct = menu.addAction("📊 Просмотр графика");
     // ✅ Только один пункт — "Настройка параметров" (не требует авторизации)
     QAction *settingsAct = menu.addAction("⚙️ Настройка параметров");
 
@@ -589,7 +592,11 @@ void BaseDocWidget::contextMenuEvent(QContextMenuEvent *event)
     QAction *selected = menu.exec(event->globalPos());
 
     // Обработка выбора
-    if (selected == settingsAct) {
+    if (selected == graphAct) {
+        // ✅ ОТКРЫВАЕМ ДИАЛОГ ПРОСМОТРА ГРАФИКА
+        onViewDataGraph();
+    }
+    else if (selected == settingsAct) {
         EquipmentSettingsDialog dlg(mainWin);
         dlg.setDocumentFilePath(m_filePath);
         dlg.setCurrentUser(mainWin->getCurrentUser());
@@ -906,13 +913,30 @@ void BaseDocWidget::ensureDatabaseTable()
     QString tableName = QFileInfo(m_filePath).completeBaseName();
     if (tableName.isEmpty()) return;
 
-    qDebug() << "[DB] Попытка создания таблицы:" << tableName
-             << "для docType =" << code;
-
-    bool result = DatabaseManager::instance().ensureDocumentTableExists(tableName, code);
+    qDebug() << "[DB] Попытка создания таблицы для файла:" << m_filePath
+             << "docType =" << code;
+    bool result = DatabaseManager::instance().ensureDocumentTableExists(m_filePath, code);
     if (result) {
-        qDebug() << "[DB] Таблица" << tableName << "готова к работе.";
+        qDebug() << "[DB] Таблица для" << m_filePath << "готова к работе.";
     } else {
-        qWarning() << "[DB] Не удалось создать таблицу" << tableName;
+        qWarning() << "[DB] Не удалось создать таблицу для" << m_filePath;
     }
+}
+
+// ============================================================================
+// ✅ НОВЫЙ МЕТОД: Открыть диалог просмотра графика
+// ============================================================================
+void BaseDocWidget::onViewDataGraph()
+{
+    // Определяем тип документа
+    int docType = databaseDocTypeCode();
+    if (docType == 0) {
+        QMessageBox::warning(this, "Ошибка", "Неизвестный тип документа");
+        return;
+    }
+
+    // Создаём и показываем диалог
+    DataViewDialog *dlg = new DataViewDialog(m_filePath, docType, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);  // ✅ Автоматическое удаление при закрытии
+    dlg->show();  // ✅ Не модальное окно, чтобы можно было работать с основным приложением
 }

@@ -247,7 +247,7 @@ private:
         formLayout->addRow("Оборудование:", equipmentLabel);
 
         // Интерфейс
-        QLabel *interfaceLabel = new QLabel(conn.interface, tab);
+        QLabel *interfaceLabel = new QLabel(conn.connectionInterface, tab);
         interfaceLabel->setStyleSheet("color: #005A9E; font-weight: bold;");
         formLayout->addRow("Интерфейс:", interfaceLabel);
 

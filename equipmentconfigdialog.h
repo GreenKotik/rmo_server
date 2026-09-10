@@ -368,7 +368,7 @@ private:
         // ✅ Загружаем параметры соединения из m_connections
         if (rowIndex < m_connections.size()) {
             const EquipmentConnection &savedConn = m_connections[rowIndex];
-            conn.interface = savedConn.interface;
+            conn.connectionInterface = savedConn.connectionInterface;
             conn.ipAddress = savedConn.ipAddress;
             conn.port = savedConn.port;
             conn.snmpV1Enabled = savedConn.snmpV1Enabled;
@@ -397,7 +397,7 @@ private:
 
             // Сохраняем в m_connections
             if (rowIndex < m_connections.size()) {
-                m_connections[rowIndex].interface = updatedConn.interface;
+                m_connections[rowIndex].connectionInterface = updatedConn.connectionInterface;
                 m_connections[rowIndex].ipAddress = updatedConn.ipAddress;
                 m_connections[rowIndex].port = updatedConn.port;
                 m_connections[rowIndex].snmpV1Enabled = updatedConn.snmpV1Enabled;
@@ -483,7 +483,7 @@ void onSave()
 
         // ✅ НОВЫЕ ПОЛЯ: берём из m_connections
         if (i < m_connections.size()) {
-            conn.interface = m_connections[i].interface;
+            conn.connectionInterface = m_connections[i].connectionInterface;
             conn.ipAddress = m_connections[i].ipAddress;
             conn.port = m_connections[i].port;
             conn.snmpV1Enabled = m_connections[i].snmpV1Enabled;
@@ -553,7 +553,7 @@ void onSave()
         connObj["deviceId"] = conn.deviceId;  // ✅ НОВОЕ: сохраняем код устройства
         connObj["useStream"] = conn.useStream;
         connObj["slowPool"] = conn.slowPool;  // ✅ НОВОЕ: сохраняем поле
-        connObj["interface"] = conn.interface;
+        connObj["interface"] = conn.connectionInterface;
         connObj["ipAddress"] = conn.ipAddress;
         connObj["port"] = conn.port;
         connObj["snmpV1Enabled"] = conn.snmpV1Enabled;
