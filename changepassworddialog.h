@@ -201,10 +201,19 @@ private slots:
 
         // ✅ Сохраняем новый пароль (без проверки текущего)
         if (DatabaseManager::instance().resetPasswordByUsername(m_username, newPass)) {
+            // ✅ Логирование смены пароля пользователем.
+            //    ВАЖНО: сам пароль в журнал НЕ пишем.
+            DatabaseManager::instance().logUserAction(
+                "Пользователи",
+                QString(),
+                QString("Пользователь '%1' сменил свой пароль").arg(m_username));
             QMessageBox::information(this, "Успех",
                 "Пароль успешно изменён.\n"
                 "Используйте новый пароль при следующей авторизации.");
             accept();
+            DatabaseManager::instance().logUserAction(
+                "Пользователи", QString(),
+                QString("Смена пароля пользователя '%1'").arg(m_username));
         } else {
             QMessageBox::critical(this, "Ошибка", "Не удалось изменить пароль.");
         }

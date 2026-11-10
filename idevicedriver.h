@@ -17,6 +17,7 @@ struct EquipmentConnection;
 struct ControlCommand {
     QString commandId;           // Уникальный ID команды (QUuid)
     int deviceIndex;             // Индекс устройства в цепочке опроса
+    int slotIndex = -1;          // стабильный адрес в m_equipmentConnections
     int commandCode;             // Код команды (из AlarmRegistry)
     QMap<QString, QVariant> params;  // Параметры команды
     int priority;                // 0=нормальный, 1=высокий
@@ -40,7 +41,12 @@ public:
     virtual void setConnectionParams(const EquipmentConnection &conn) {
         Q_UNUSED(conn);
     }
-
+    // ✅ НОВОЕ: Виртуальный метод для передачи специфичных настроек устройства
+    // (тип датчика, поправка, пределы и т.п.), полученных из файла документа.
+    // По умолчанию ничего не делает — переопределяется в конкретных драйверах.
+    virtual void setDeviceSettings(const QJsonObject &settings) {
+        Q_UNUSED(settings);
+    }
     // ✅ Методы подключения
     virtual bool connect() = 0;
     virtual void disconnect() = 0;

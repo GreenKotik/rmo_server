@@ -4,6 +4,8 @@
 #include <QPainter>
 #include <algorithm>
 #include <QVBoxLayout>
+#include <QEvent>
+#include <QMouseEvent>
 
 namespace AlarmColors {
     static const QColor CRITICAL_BG(255, 235, 238);
@@ -61,13 +63,26 @@ int AlarmListModel::criticalAlarmCount() const {
     return count;
 }
 
-// Реализация Делегата (исправлена инкапсуляция)
+bool AlarmListModel::removeAlarmByCode(int code)
+{
+    for (int row = 0; row < m_alarms.size(); ++row) {
+        if (m_alarms[row].code == code) {
+            beginRemoveRows(QModelIndex(), row, row);
+            m_alarms.removeAt(row);
+            endRemoveRows();
+            return true;
+        }
+    }
+    return false;
+}
+
+// Реализация Делегата
 AlarmItemDelegate::AlarmItemDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
 
 void AlarmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const {
     painter->save();
 
-    // --- 1. БЫСТРЫЙ ФОН (без сглаживания) ---
+    // --- 1. БЫСТРЫЙ ФОН  ---
     painter->setRenderHint(QPainter::Antialiasing, false); // Оставляем выключенным для прямоугольников
 
     int status = index.data(AlarmListModel::StatusRole).toInt();
@@ -119,11 +134,80 @@ void AlarmItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
     painter->setPen(penColor);
     painter->drawText(xPos, r.top(), r.width() - xPos, textHeight, Qt::AlignVCenter, text);
 
+    // Рисуем кнопку «Подтвердить» справа.
+    const int btnH = qMin(option.rect.height() - 6, 18);
+    const int btnW = ACK_BTN_WIDTH - 8;
+    const QRect btnRect(
+        option.rect.right() - ACK_BTN_WIDTH + 4,
+        option.rect.top() + (option.rect.height() - btnH) / 2,
+        btnW,
+        btnH
+    );
+
+    painter->setRenderHint(QPainter::Antialiasing, true);
+
+    // Фон кнопки
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QColor("#E8F0F8"));
+    painter->drawRoundedRect(btnRect, 3, 3);
+
+    // Рамка кнопки
+    QPen border(QColor("#005A9E"), 1);
+    painter->setPen(border);
+    painter->setBrush(Qt::NoBrush);
+    painter->drawRoundedRect(btnRect, 3, 3);
+
+    // Галочка ✓
+    QPen checkPen(QColor("#2E7D32"), 2);
+    checkPen.setCapStyle(Qt::RoundCap);
+    checkPen.setJoinStyle(Qt::RoundJoin);
+    painter->setPen(checkPen);
+
+    const QPointF c = btnRect.center();
+    const QPointF p1(c.x() - 4, c.y() + 0.5);
+    const QPointF p2(c.x() - 1, c.y() + 3);
+    const QPointF p3(c.x() + 4, c.y() - 3);
+    painter->drawLine(p1, p2);
+    painter->drawLine(p2, p3);
+
     painter->restore();
 }
 
 QSize AlarmItemDelegate::sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const {
     return QSize(-1, AlarmItemDelegate::ROW_HEIGHT);
+}
+
+bool AlarmItemDelegate::editorEvent(QEvent *event,
+                                    QAbstractItemModel *model,
+                                    const QStyleOptionViewItem &option,
+                                    const QModelIndex &index)
+{
+    if (!index.isValid()) return false;
+
+    if (event->type() == QEvent::MouseButtonRelease) {
+        auto *me = static_cast<QMouseEvent*>(event);
+        if (me->button() != Qt::LeftButton) {
+            return QStyledItemDelegate::editorEvent(event, model, option, index);
+        }
+
+        // Зона кнопки (та же, что в paint()).
+        const int btnH = qMin(option.rect.height() - 6, 18);
+        const int btnW = ACK_BTN_WIDTH - 8;
+        const QRect btnRect(
+            option.rect.right() - ACK_BTN_WIDTH + 4,
+            option.rect.top() + (option.rect.height() - btnH) / 2,
+            btnW,
+            btnH
+        );
+
+        if (btnRect.contains(me->pos())) {
+            const int code = index.data(AlarmListModel::CodeRole).toInt();
+            emit acknowledgeClicked(index.row(), code);
+            return true;   // съели событие
+        }
+    }
+
+    return QStyledItemDelegate::editorEvent(event, model, option, index);
 }
 
 // Реализация Панели (исправлены ошибки синтаксиса и имен)
@@ -140,14 +224,16 @@ AlarmPanel::AlarmPanel(QWidget *parent)
     m_alarmView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_alarmView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    // ИСПРАВЛЕНО: WA_StaticContents (для Qt5)
     m_alarmView->viewport()->setAttribute(Qt::WA_StaticContents);
     m_alarmView->setUniformItemSizes(true);
 
     m_alarmView->setModel(m_model);
     m_alarmView->setItemDelegate(m_delegate);
 
-    // ИСПРАВЛЕНО: Явное указание пространства имен (fix available предлагал именно это)
+    // подключаем сигнал делегата к слоту панели.
+    connect(m_delegate, &AlarmItemDelegate::acknowledgeClicked,
+            this, &AlarmPanel::onAcknowledgeClicked);
+
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 4, 6, 6);
     layout->setSpacing(2);
@@ -163,12 +249,19 @@ AlarmPanel::AlarmPanel(QWidget *parent)
 
 AlarmPanel::~AlarmPanel() = default;
 
-void AlarmPanel::setAlarms(const QList<int> &codes, const QList<int> &statuses) {
+void AlarmPanel::setAlarms(const QList<int> &codes,
+                           const QList<int> &statuses,
+                           const QDateTime &cycleTime)
+{
     QList<AlarmEntry> entries;
+    entries.reserve(qMin(codes.size(), statuses.size()));
+
     for (int i = 0; i < codes.size() && i < statuses.size(); ++i) {
-        AlarmEntry e{codes[i], statuses[i], "", QDateTime::currentDateTime(), 0};
+        // ✅ Используем переданное цикловое время, а не текущее системное.
+        AlarmEntry e{codes[i], statuses[i], "", cycleTime, 0};
         entries.append(e);
     }
+
     m_model->setAlarms(entries);
     emit alarmCountChanged(m_model->criticalAlarmCount());
 }
@@ -219,3 +312,11 @@ void AlarmPanel::paintEvent(QPaintEvent *event)
     }
 }
 
+void AlarmPanel::onAcknowledgeClicked(int row, int code)
+{
+    Q_UNUSED(row);
+    if (m_model->removeAlarmByCode(code)) {
+        emit alarmCountChanged(m_model->criticalAlarmCount());
+        emit alarmAcknowledged(code);
+    }
+}

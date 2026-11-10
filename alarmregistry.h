@@ -52,6 +52,9 @@ public:
         return m_alarms.contains(code);
     }
 
+    // Зарегистрирован ли код (авария или команда)
+    bool hasCode(int code) const { return m_alarms.contains(code); }
+
 private:
     AlarmRegistry();
     ~AlarmRegistry()

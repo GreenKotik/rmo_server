@@ -32,6 +32,8 @@ public:
 
     void setAlarms(const QList<AlarmEntry> &alarms);
     int criticalAlarmCount() const;
+    // Удалить аварию по коду. Возвращает true, если что-то удалено.
+    bool removeAlarmByCode(int code);
 
 private:
     QVector<AlarmEntry> m_alarms;
@@ -45,9 +47,19 @@ public:
     explicit AlarmItemDelegate(QObject *parent = nullptr);
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override;
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override;
+    // обработка клика по кнопке «Подтвердить»
+    bool editorEvent(QEvent *event,
+                     QAbstractItemModel *model,
+                     const QStyleOptionViewItem &option,
+                     const QModelIndex &index) override;
 
-//private:
+signals:
+    // Эмитится при клике по кнопке «Подтвердить»
+    void acknowledgeClicked(int row, int code);
+
+public:
     static constexpr int ROW_HEIGHT = 24;
+    static constexpr int ACK_BTN_WIDTH = 28; // ширина зоны кнопки справа
 };
 
 // *** ОСНОВНОЙ ВИДЖЕТ ПАНЕЛИ ***
@@ -58,13 +70,21 @@ public:
     explicit AlarmPanel(QWidget *parent = nullptr);
     ~AlarmPanel();
 
-    void setAlarms(const QList<int> &codes, const QList<int> &statuses);
+    void setAlarms(const QList<int> &codes,
+                   const QList<int> &statuses,
+                   const QDateTime &cycleTime);
     void clearAlarms();
     int criticalAlarmCount() const;
     int calculateHeight() const;
 
 signals:
     void alarmCountChanged(int count);
+    // пользователь подтвердил аварию с кодом code.
+    void alarmAcknowledged(int code);
+
+private slots:
+    // обработчик клика по кнопке «Подтвердить» в делегате.
+    void onAcknowledgeClicked(int row, int code);
 
 private:
     // UI элементы нового типа

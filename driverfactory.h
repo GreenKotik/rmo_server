@@ -5,10 +5,9 @@
 #include <QDebug>
 #include "idevicedriver.h"
 #include "deviceids.h"
-#include "temperaturedriver.h"
 #include "boreas3driver.h"  // ✅ ДОБАВИТЬ
 #include "temonitorv6driver.h"
-#include "teletehdriver.h"
+#include "modulatordriver.h"
 #include "devswdriver.h"
 
 // ============================================================================
@@ -27,8 +26,14 @@ public:
                 return std::make_unique<TEMonitorV6Driver>(deviceId, parent);
 
             case ID_MOD_TELETEH_TT_MC_72:
-                return std::make_unique<TeletehDriver>(deviceId, parent);
+                return std::make_unique<ModulatorDriver>(deviceId, parent);
 
+    // Задел на будущее (раскомментировать по мере готовности конфигов):
+    //    case ID_MOD_ENENSESS_XSSR:
+    //    case ID_MOD_SENCORE_SDM_989:
+    //    case ID_MOD_NEWTEC_M_6100:
+    //    case ID_MOD_NEWTEC_AZ_110:
+    //        return std::make_unique<ModulatorDriver>(deviceId, parent);
             case ID_MOD_SW_DEV:
                 return std::make_unique<DevSwDriver>(deviceId, parent);
 

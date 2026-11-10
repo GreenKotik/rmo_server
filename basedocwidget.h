@@ -14,10 +14,10 @@
 #include <QDataStream>
 #include <QList>
 #include <QContextMenuEvent>
-#include <QReadWriteLock>  // ✅ НОВОЕ: для потокобезопасного доступа к данным
-#include <QMap>              // ✅ Для QMap
-#include <memory> // ✅ Для std::shared_ptr
-
+#include <QReadWriteLock>
+#include <QMap>
+#include <memory>
+#include <QSet>
 #include "ledindicator.h"
 #include "networkcontroller.h"
 #include "deviceids.h"  // ✅ Коды типов оборудования
@@ -62,6 +62,11 @@ struct EquipmentConnection {
     int dataBits = 8;             // Биты данных (7, 8)
     QString parity = "None";      // Чётность ("None", "Even", "Odd")
     int stopBits = 1;             // Стоп-биты (1, 2)
+
+    // ✅ НОВОЕ: Специфичные настройки устройства из файла документа
+    // (тип датчика, поправка, пределы и т.п.). Хранит произвольный JSON,
+    // специфика определяется типом устройства (deviceId).
+    QJsonObject deviceSettings;
 
     int errorCode = 4;
 
@@ -164,15 +169,27 @@ public:
         QReadLocker locker(&m_dataLock);
         return m_lastDeviceData.value(deviceId);
     }
-    // ✅ НОВОЕ: Получить унифицированные данные температуры для указанного слота
-    // slotIndex — индекс строки в m_equipmentConnections (например, 11 для "Температура")
-    std::shared_ptr<TemperaturaData> getTemperatureDataForSlot(int slotIndex) const;
+    // Получить строку ErrorsAll по всем устройствам документа в формате "N;code1;code2;...;"
+    QString buildErrorsAllString() const;
+    // ✅ Цикловое время документа, зафиксированное Time Pool-цепочкой
+    //    в рабочем потоке. Slow-пул на него не влияет.
+    //    Возвращает невалидный QDateTime, если Time Pool ещё не отработал.
+    //    Реализация — в basedocwidget.cpp, где pollscheduler.h доступен целиком.
+    QDateTime lastCycleTime() const;
+    // ✅ Управление звуком аварий (для подключения к кнопке в заголовке).
+    void setAlarmSoundEnabled(bool enabled) {
+        m_alarmSoundEnabled = enabled;
+    }
+    bool isAlarmSoundEnabled() const {
+        return m_alarmSoundEnabled;
+    }
 
 signals:
     void modifiedChanged(bool);
-    // ✅ НОВЫЙ СИГНАЛ: Уведомление об изменении аварий в документе
-    void alarmsUpdated(const QString &docPath, const QList<int> &alarmCodes, const QList<int> &alarmStatuses);
-    // ✅ НОВЫЙ СИГНАЛ: Начало цикла опроса (проксируется от PollScheduler)
+    void alarmsUpdated(const QString &docPath,
+                       const QList<int> &alarmCodes,
+                       const QList<int> &alarmStatuses,
+                       const QDateTime &cycleTime);   // ✅ добавить
     void pollCycleStarted();
 
 protected:
@@ -197,6 +214,12 @@ protected:
     QHash<QTcpSocket*, DocClientState> m_docStates;
     QTimer *m_docHeartbeatTimer;
     LedIndicator *m_titleIndicator = nullptr;
+    // ✅ Кэш последнего отправленного состояния аварий
+    // Используется в finalizePollCycle, чтобы не эмитить alarmsUpdated,
+    // если список не изменился (иначе панель аварий мигает на каждом тике).
+    QList<int> m_lastSentAlarmCodes;
+    QList<int> m_lastSentAlarmStatuses;
+    bool m_alarmsCacheInitialized = false;
 
     // ✅ НОВЫЕ ПОЛЯ для контроля целостности конфигурации
     QList<EquipmentConnection> m_equipmentConnections;
@@ -221,27 +244,81 @@ protected:
     virtual void updateUIFromBuffer() {
         // Базовая реализация пустая, переопределяется в наследниках (например, PeredatchikWidget)
     }
+    // ✅ НОВЫЙ МЕТОД: Хук, вызываемый после перезагрузки настроек из файла.
+    // Наследники могут переопределить, чтобы перечитать свои кэшированные
+    // настройки (например, конфигурацию датчиков).
+    virtual void onSettingsReloaded() {
+        // Базовая реализация — пустая.
+    }
+    // ✅ НОВЫЙ МЕТОД: Хук, вызываемый в конце loadFromFilePreserveSections.
+    // Наследники могут переопределить, чтобы загрузить кэшированные настройки
+    // после чтения файла документа (независимо от того, кто вызвал загрузку).
+    virtual void onFileLoaded() {
+        // Базовая реализация — пустая.
+    }
     // ✅ НОВОЕ: Автоматическое создание таблицы в БД при загрузке документа
     void ensureDatabaseTable();
 
     // ✅ НОВОЕ: Возвращает числовой код типа документа для БД
     virtual int databaseDocTypeCode() const;
+    // ✅ Накопленные ошибки по каждому устройству: deviceId → коды
+    // Обновляется в processPollResult(), читается при записи в БД.
+    QMap<int, QList<int>> m_deviceErrors;
+    // Подтверждённые пользователем аварии.
+    //    Пока авария в этом множестве, она не попадает в alarmsUpdated
+    //    и не озвучивается. Как только авария исчезает из устройства,
+    //    она удаляется из множества — и при повторном появлении снова видна.
+    QSet<int> m_acknowledgedAlarms;
+    // ========================================================================
+    // ✅ НОВОЕ: Накопление времени до записи в БД.
+    //
+    // Каждый цикл опроса к счётчику добавляется polling_interval.
+    // Когда счётчик >= db_write_interval — устанавливается флаг записи
+    // (в общей структуре документа), счётчик обнуляется.
+    // Флаг уходит клиентам по сети вместе с данными — клиент по нему
+    // тоже пишет в свою локальную БД.
+    // ========================================================================
+    int m_msSinceLastDbWrite = 0;
+
+    // ✅ Счётчик времени с момента появления аварии.
+    // Накопление интервалов опроса (polling_interval) на каждом цикле.
+    //   0 — окно аварийной записи закрыто (аварии нет или оно истекло);
+    //   >0 — идёт отсчёт.
+    // Сброс — только при пропадании аварии (по ErrorsAll).
+    int m_msSinceAlarmWindowStart = 0;
+
+    // Вызывается каждый цикл опроса в updateUIFromBuffer() наследника.
+    // errorsAll — строка "N;code1;code2;...".
+    // Возвращает true, если в этом цикле нужно писать в БД.
+    bool shouldWriteToDb(const QString &errorsAll);
+    // ✅ НОВЫЙ МЕТОД: Финализация цикла опроса
+    // Вызывается из updateUIFromBuffer() (или processDocClientData() на клиенте)
+    // ПОСЛЕ того, как агрегированная структура данных полностью сформирована.
+    // Делает:
+    //   1. Обновляет цвет заголовка (updateAlarmState)
+    //   2. Эмитит сигнал alarmsUpdated для панели аварий
+    void finalizePollCycle();
+    // Проигрыватель звуков аварий.
+    bool m_alarmSoundEnabled = true;
 
 private:
-    // ✅ ОБЪЯВЛЕНИЯ МЕТОДОВ ПРОВЕРКИ
+    // ОБЪЯВЛЕНИЯ МЕТОДОВ ПРОВЕРКИ
     void loadAndValidateEquipmentConnections();
     void writeEquipmentErrorLog();
-    // ✅ НОВОЕ: Конвертер "сырых" данных драйвера в унифицированную TemperaturaData
-    std::shared_ptr<TemperaturaData> convertToTemperatureData(
-        int deviceId,
-        const std::shared_ptr<IDeviceData>& rawData) const;
+
+protected slots:
+    // Доступно наследникам (например, ModulatorWidget)
+    void onViewDataGraph();
+
+public slots:
+    // Пользователь подтвердил аварию.
+    void onAlarmAcknowledged(int code);
 
 private slots:
     void onDocNewConnection();
     void onDocClientReadyRead();
     void onDocClientDisconnected();
     void onDocHeartbeatTimeout();
-    void onViewDataGraph();  // ✅ Новый слот для открытия диалога
 
     static QByteArray serializePacket(const QJsonObject &obj);
     static bool parsePacket(QByteArray &buffer, QJsonObject &outObj);

@@ -1,5 +1,6 @@
 #include "energowidget.h"
 #include "ui_energoform.h"
+#include "databasemanager.h"  // ✅ Для записи в БД
 
 #include <QFile>
 #include <QJsonDocument>
@@ -91,6 +92,21 @@ void EnergoWidget::saveToFile()
 
 void EnergoWidget::processDocClientData(const QJsonObject &data)
 {
+    if (data.value("action").toString() == "EnergoDataUpdate") {
+        const QJsonObject payload = data.value("data").toObject();
+        const bool writeToDb = payload.value("write_to_db").toBool(false);
+
+        if (writeToDb && !m_filePath.isEmpty()) {
+            DatabaseManager::instance().logDocumentData(
+                m_filePath, 3, payload);
+        }
+        return;
+    }
+
+    // ... обработка doc_update (voltage / current / stabilized) ...
+    if (data.contains("voltage")) {
+        ui->voltageBox->setCurrentText(data["voltage"].toString());
+    }
     // Применение данных, полученных от сервера или другого клиента по сети
     if (data.contains("voltage")) {
         ui->voltageBox->setCurrentText(data["voltage"].toString());

@@ -3,7 +3,7 @@
 #include <QJsonObject>
 #include <QDateTime>
 #include <QtMath> // Для qPow
-
+#include <QSysInfo>
 
 // ============================================================================
 // ✅ ЕДИНАЯ ФУНКЦИЯ ОЧИСТКИ ИМЕНИ ТАБЛИЦЫ
@@ -625,7 +625,7 @@ bool DatabaseManager::logDocumentData(const QString &filePath, int docType, cons
                       "\"Obogrev_V7\", \"Obogrev_A7\", \"Obogrev_W7\", \"Obogrev_V8\", \"Obogrev_A8\", \"Obogrev_W8\", "
                       "\"Obogrev_V9\", \"Obogrev_A9\", \"Obogrev_W9\", \"Obogrev_V10\", \"Obogrev_A10\", \"Obogrev_W10\", "
                       "\"Obogrev_V11\", \"Obogrev_A11\", \"Obogrev_W11\", \"Obogrev_V12\", \"Obogrev_A12\", \"Obogrev_W12\") "
-                      "VALUES (CURRENT_TIMESTAMP, "
+                      "VALUES (:ts, "
                       ":az, :el, :pol, :sig, :sat, :stat, :obr_t, :pit_p, :ant_err, :err_all, "
                       ":kom, :pr_k, :pr_p, :pr_da, :pr_de, :pr_pa, :pr_pe, "
                       ":i1v, :i1a1, :i1w1, :i1a2, :i1w2, :i1a3, :i1w3, :i1a4, :i1w4, :i1a5, :i1w5, :i1a6, :i1w6, "
@@ -639,6 +639,9 @@ bool DatabaseManager::logDocumentData(const QString &filePath, int docType, cons
               .arg(quotedTableName);
 
         query.prepare(sql);
+        QDateTime ts = QDateTime::fromString(data.value("Дата_и_время").toString(), Qt::ISODate);
+        if (!ts.isValid()) ts = QDateTime::currentDateTime();
+        query.bindValue(":ts", ts);
         query.bindValue(":az", getDouble("Азимут"));
         query.bindValue(":el", getDouble("Угол_места"));
         query.bindValue(":pol", getDouble("Угол_поляризации"));
@@ -704,7 +707,7 @@ bool DatabaseManager::logDocumentData(const QString &filePath, int docType, cons
                       "\"PerPowerIn3\", \"PerPower3\", \"PerPowerOtr3\", \"Attenuator3\", \"Spiral3\", \"PerStatus3\", "
                       "\"SwitchPower\", \"SwitchStatus\", \"SwitchReg\", \"SwitchKanal\", \"Temper1\", \"Temper2\", "
                       "\"ErrorsAll\", \"ProtokolPer1\", \"ProtokolPer2\", \"ProtokolPer3\", \"ProtokolPerSW\") "
-                      "VALUES (CURRENT_TIMESTAMP, :sat, "
+                      "VALUES (:ts, :sat, "
                       ":pi1, :p1, :po1, :a1, :s1, :st1, "
                       ":pi2, :p2, :po2, :a2, :s2, :st2, "
                       ":pi3, :p3, :po3, :a3, :s3, :st3, "
@@ -713,6 +716,9 @@ bool DatabaseManager::logDocumentData(const QString &filePath, int docType, cons
               .arg(quotedTableName);
 
         query.prepare(sql);
+        QDateTime ts = QDateTime::fromString(data.value("Дата_и_время").toString(), Qt::ISODate);
+        if (!ts.isValid()) ts = QDateTime::currentDateTime();
+        query.bindValue(":ts", ts);
         query.bindValue(":sat", getString("Спутник"));
 
         query.bindValue(":pi1", getDouble("PerPowerIn1"));
@@ -783,7 +789,7 @@ bool DatabaseManager::logDocumentData(const QString &filePath, int docType, cons
                       "\"IBP3_Out_H\", \"IBP3_Out_V1\", \"IBP3_Out_V2\", \"IBP3_Out_V3\", \"IBP3_Out_A1\", \"IBP3_Out_A2\", \"IBP3_Out_A3\", "
                       "\"IBP3_Out_W1\", \"IBP3_Out_W2\", \"IBP3_Out_W3\", \"IBP3_Bat_V\", \"IBP3_Bat_A\", \"IBP3_Bat_Zarad\", "
                       "\"Temperatura1\", \"Temperatura2\", \"ErrorsAll\", \"ProtokolIBP1\", \"ProtokolIBP2\", \"ProtokolIBP3\") "
-                      "VALUES (CURRENT_TIMESTAMP, "
+                      "VALUES (:ts, "
                       ":v1iv1, :v1iv2, :v1iv3, :v1ia1, :v1ia2, :v1ia3, :v1iw1, :v1iw2, :v1iw3, :v1ih, :v1iaa, "
                       ":v1ov1, :v1ov2, :v1ov3, :v1oa1, :v1oa2, :v1oa3, :v1ow1, :v1ow2, :v1ow3, :v1oh, :v1oaa, "
                       ":v2iv1, :v2iv2, :v2iv3, :v2ia1, :v2ia2, :v2ia3, :v2iw1, :v2iw2, :v2iw3, :v2ih, :v2iaa, "
@@ -802,6 +808,9 @@ bool DatabaseManager::logDocumentData(const QString &filePath, int docType, cons
               .arg(quotedTableName);
 
         query.prepare(sql);
+        QDateTime ts = QDateTime::fromString(data.value("Дата_и_время").toString(), Qt::ISODate);
+        if (!ts.isValid()) ts = QDateTime::currentDateTime();
+        query.bindValue(":ts", ts);
 
         #define BIND_D(name, key) query.bindValue(name, getDouble(key))
         #define BIND_S(name, key) query.bindValue(name, getString(key))
@@ -881,6 +890,18 @@ bool DatabaseManager::logDocumentData(const QString &filePath, int docType, cons
 
         break;
     }
+    case 4: { // Модулятор (docType 4)
+        sql = QString("INSERT INTO \"%1\" (\"Дата_и_время\", \"Статус\", \"ErrorsAll\") "
+                      "VALUES (:ts, :stat, :err)").arg(quotedTableName);
+        query.prepare(sql);
+        QDateTime ts = QDateTime::fromString(data.value("Дата_и_время").toString(), Qt::ISODate);
+        if (!ts.isValid()) ts = QDateTime::currentDateTime();
+        query.bindValue(":ts", ts);
+        query.bindValue(":stat", getString("Статус"));
+        query.bindValue(":err", getString("ErrorsAll"));
+        // TODO: Добавьте поля модулятора, когда определите их список
+        break;
+    }
 
     default:
         qWarning() << "[DB Log] Неизвестный тип документа:" << docType;
@@ -892,5 +913,81 @@ bool DatabaseManager::logDocumentData(const QString &filePath, int docType, cons
         return false;
     }
 
+    return true;
+}
+
+bool DatabaseManager::ensureUserActionsLogTable()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "[DB] ensureUserActionsLogTable: БД не открыта";
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    const QString createSql = R"(
+        CREATE TABLE IF NOT EXISTS user_actions_log (
+            id        SERIAL PRIMARY KEY,
+            timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            computer  TEXT NOT NULL,
+            username  TEXT NOT NULL,
+            station   TEXT NOT NULL DEFAULT '',
+            operation TEXT NOT NULL,
+            message   TEXT NOT NULL
+        )
+    )";
+    if (!query.exec(createSql)) {
+        qWarning() << "[DB] Не удалось создать user_actions_log:"
+                   << query.lastError().text();
+        return false;
+    }
+
+    // Индекс по времени — для быстрой фильтрации по диапазону.
+    if (!query.exec("CREATE INDEX IF NOT EXISTS idx_user_actions_log_timestamp "
+                    "ON user_actions_log (timestamp)")) {
+        qWarning() << "[DB] Не удалось создать индекс по timestamp:"
+                   << query.lastError().text();
+        // не критично
+    }
+
+    qDebug() << "[DB] Таблица user_actions_log готова";
+    return true;
+}
+
+bool DatabaseManager::logUserAction(const QString &operation,
+                                    const QString &station,
+                                    const QString &message)
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "[DB] logUserAction: БД не открыта";
+        return false;
+    }
+
+    const QString computer = QSysInfo::machineHostName();
+
+    QString user = m_currentUserName;
+    if (user.isEmpty()) user = QStringLiteral("Аноним");
+
+    // ✅ Нормализуем строки: QString() → QString("") для NOT NULL колонок.
+    auto safe = [](const QString &s) -> QString {
+        return s.isNull() ? QString("") : s;
+    };
+
+    QSqlQuery query(m_db);
+    query.prepare(
+        "INSERT INTO user_actions_log "
+        "(timestamp, computer, username, station, operation, message) "
+        "VALUES (CURRENT_TIMESTAMP, :computer, :user, :station, :operation, :message)"
+    );
+    query.bindValue(":computer",  safe(computer));
+    query.bindValue(":user",      safe(user));
+    query.bindValue(":station",   safe(station));
+    query.bindValue(":operation", safe(operation));
+    query.bindValue(":message",   safe(message));
+
+    if (!query.exec()) {
+        qWarning() << "[DB] Ошибка записи в журнал действий:"
+                   << query.lastError().text();
+        return false;
+    }
     return true;
 }

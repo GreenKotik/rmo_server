@@ -143,10 +143,18 @@ public:
         }
 
         qDebug() << "[DB] Успешное подключение к" << dbName << "на" << host;
+
+        // ✅ Создаём таблицу журнала действий, если её нет.
+        ensureUserActionsLogTable();
+
         return true;
     }
 
     bool isConnected() const { return m_db.isOpen(); }
+    // ✅ НОВЫЙ МЕТОД: получить открытое соединение с БД
+    // Возвращает QSqlDatabase по значению — это корректно, QSqlDatabase
+    // использует неявное разделение данных (implicit sharing).
+    QSqlDatabase database() const { return m_db; }
 
     // ✅ НОВЫЙ МЕТОД: Получить всех пользователей (для таблицы администрирования)
     QList<UserInfo> getAllUsers()
@@ -423,7 +431,8 @@ public:
                    << "manage_users"
                    << "reset_passwords"
                    << "change_network_settings"
-                   << "change_database_settings"  // ✅ НОВОЕ ПРАВО
+                   << "change_database_settings"
+                   << "edit_driver_config"  // ✅ НОВОЕ ПРАВО
                    << "import_config"
                    << "view_all_logs";
 
@@ -453,6 +462,26 @@ public:
     // ✅ НОВОЕ: Единая функция для получения безопасного имени таблицы
     static QString getSafeTableName(const QString &filePath);
 
+    // =========================================================================
+    // ✅ ЖУРНАЛ ДЕЙСТВИЙ ПОЛЬЗОВАТЕЛЕЙ
+    // =========================================================================
+
+    // Записать действие пользователя в журнал.
+    //   operation — категория: "Пользователи", "Параметры", "Команды",
+    //               "Администрирование", "Аварии".
+    //   station   — имя документа (или пустая строка для системных действий).
+    //   message   — текст действия, может содержать '\n'.
+    bool logUserAction(const QString &operation,
+                       const QString &station,
+                       const QString &message);
+
+    // Создать таблицу журнала, если её нет. Вызывается при connect().
+    bool ensureUserActionsLogTable();
+
+    // Текущее имя авторизованного пользователя (для журнала).
+    QString currentUserName() const { return m_currentUserName; }
+    void setCurrentUserName(const QString &name) { m_currentUserName = name; }
+
 private:
     DatabaseManager() = default;
     ~DatabaseManager()
@@ -465,7 +494,8 @@ private:
     }
     DatabaseManager(const DatabaseManager&) = delete;
     DatabaseManager& operator=(const DatabaseManager&) = delete;
-    // В private секции добавить:
+
+    QString m_currentUserName;
     QString m_currentUserRole;
 
     QSqlDatabase m_db;

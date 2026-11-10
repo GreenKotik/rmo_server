@@ -17,11 +17,13 @@
 #include <QMenu>
 #include <QAction>
 #include <QContextMenuEvent>
+#include <algorithm>
 #include "equipmentsettingsdialog.h"  // ✅ Для открытия диалога настройки
 #include "pollscheduler.h"   // ✅ Для PollScheduler
 #include "devicedata.h"      // ✅ Для IDeviceData
 #include "alarmregistry.h"   // ✅ Для AlarmRegistry
 #include "dataviewdialog.h"  // ✅ Добавляем после других includes
+#include "alarmsoundplayer.h"
 
 BaseDocWidget::BaseDocWidget(QWidget *parent)
     : QWidget(parent),
@@ -32,14 +34,20 @@ BaseDocWidget::BaseDocWidget(QWidget *parent)
     // ✅ Растягиваться и по горизонтали, и по вертикали
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
+    connect(this, &BaseDocWidget::pollCycleStarted,
+            this, &BaseDocWidget::triggerIndicatorBlink);
+
     connect(m_docHeartbeatTimer, &QTimer::timeout, this, &BaseDocWidget::onDocHeartbeatTimeout);
     m_docHeartbeatTimer->start(10000);
-
 }
 
 BaseDocWidget::~BaseDocWidget()
 {
     qDebug() << "[BaseDocWidget] Деструктор НАЧАЛО:" << m_filePath;
+
+    // ✅ Убираем документ из очереди глобального плеера.
+    AlarmSoundPlayer::instance().unregisterDoc(
+        QFileInfo(m_filePath).completeBaseName());
 
     // 1. Останавливаем таймер heartbeat
     if (m_docHeartbeatTimer) {
@@ -224,14 +232,37 @@ bool BaseDocWidget::saveToFilePreserveSections(const QString &filePath)
 
 bool BaseDocWidget::loadFromFilePreserveSections(const QString &filePath)
 {
-    // ✅ Сбрасываем флаг первого опроса при загрузке документа
+    // ========================================================================
+    // ✅ 1. СБРОС СОСТОЯНИЯ ПЕРЕД ЗАГРУЗКОЙ НОВОГО ДОКУМЕНТА
+    // ========================================================================
+
+    // Флаг первого опроса — чтобы индикатор заголовка не мигал при старте
     m_firstPollReceived = false;
 
-    // ✅ Выключаем индикатор при загрузке
+    // Кэш последних отправленных аварий — чтобы первый finalizePollCycle()
+    // гарантированно эмитил alarmsUpdated (даже если список пуст).
+    m_lastSentAlarmCodes.clear();
+    m_lastSentAlarmStatuses.clear();
+    m_alarmsCacheInitialized = false;
+    // ✅ Сброс кэша подтверждённых аварий при загрузке нового документа.
+    m_acknowledgedAlarms.clear();
+
+    // ✅ НОВОЕ: счётчики записи в БД.
+    //   m_msSinceLastDbWrite       — накопление до db_write_interval;
+    //   m_msSinceAlarmWindowStart  — накопление окна аварийной записи
+    //                                (alarm_write_duration_min).
+    //   Оба должны стартовать с нуля при загрузке нового файла.
+    m_msSinceLastDbWrite      = 0;
+    m_msSinceAlarmWindowStart = 0;
+
+    // Индикатор заголовка — выключаем, пока не получим первый ответ от устройства
     if (m_titleIndicator) {
         m_titleIndicator->setState(LedIndicator::State::Gray);
     }
 
+    // ========================================================================
+    // ✅ 2. ОТКРЫТИЕ И ЧТЕНИЕ ФАЙЛА
+    // ========================================================================
     QFile file(filePath);
     if (!file.exists()) return false;
 
@@ -240,22 +271,29 @@ bool BaseDocWidget::loadFromFilePreserveSections(const QString &filePath)
         m_fullDocument = doc.object();
         file.close();
 
-        // ✅ 1. ЗАГРУЗКА И ПРОВЕРКА ПОДКЛЮЧЕНИЙ ОБОРУДОВАНИЯ
+        // ====================================================================
+        // ✅ 3. ЗАГРУЗКА И ПРОВЕРКА ПОДКЛЮЧЕНИЙ ОБОРУДОВАНИЯ
+        // ====================================================================
         loadAndValidateEquipmentConnections();
 
-        // ✅ 2. НОВОЕ: Инициализация планировщика опроса (если ещё не создан)
+        // ====================================================================
+        // ✅ 4. ИНИЦИАЛИЗАЦИЯ ПЛАНИРОВЩИКА ОПРОСА (если ещё не создан)
+        // ====================================================================
         if (!m_pollScheduler) {
             m_pollScheduler = new PollScheduler(this, this);
-            // Подключаем сигналы
+
             connect(m_pollScheduler, &PollScheduler::pollResult,
                     this, &BaseDocWidget::processPollResult);
-            // ✅ НОВОЕ: Проксируем сигнал начала цикла
+
+            // Проксируем сигнал начала цикла (для синхронного мигания индикатора)
             connect(m_pollScheduler, &PollScheduler::cycleStarted,
                     this, &BaseDocWidget::pollCycleStarted);
-            // ✅ Подключаем сигнал завершения цикла к обновлению UI
+
+            // Завершение всех цепочек Fast Pool → обновление UI/БД/рассылки
             connect(m_pollScheduler, &PollScheduler::allCyclesFinished,
                     this, &BaseDocWidget::updateUIFromBuffer,
-                    Qt::QueuedConnection); // Гарантированно в главном потоке
+                    Qt::QueuedConnection);  // Гарантированно в главном потоке
+
             connect(m_pollScheduler, &PollScheduler::errorOccurred,
                     this, [this](int chainId, int deviceIndex, const QString &error) {
                         qWarning() << "[BaseDocWidget] Ошибка опроса:"
@@ -263,41 +301,55 @@ bool BaseDocWidget::loadFromFilePreserveSections(const QString &filePath)
                                    << "deviceIndex:" << deviceIndex
                                    << "error:" << error;
                     });
+
             qDebug() << "[BaseDocWidget] PollScheduler создан для:" << filePath;
         }
 
-        // ✅ 3. НОВОЕ: Читаем интервал опроса из секции settings
+        // ====================================================================
+        // ✅ 5. ЧТЕНИЕ ИНТЕРВАЛА ОПРОСА ИЗ СЕКЦИИ settings
+        // ====================================================================
         QJsonObject settings = m_fullDocument.value("settings").toObject();
         int pollingInterval = settings.value("polling_interval").toInt(1000);
 
-        // ✅ Защита от слишком маленького интервала (минимум 100 мс)
+        // Защита от слишком маленького интервала
         if (pollingInterval < 100) {
             qWarning() << "[BaseDocWidget] Интервал опроса слишком маленький ("
                        << pollingInterval << "мс), установлено 100 мс";
             pollingInterval = 100;
         }
 
-        // ✅ Применяем интервал к планировщику
         m_pollScheduler->setPollingInterval(pollingInterval);
         qDebug() << "[BaseDocWidget] Интервал опроса:" << pollingInterval << "мс";
 
-        // ✅ 4. Инициализируем цепочки и запускаем опрос
+        // ====================================================================
+        // ✅ 6. ИНИЦИАЛИЗАЦИЯ ЦЕПОЧЕК И ЗАПУСК ОПРОСА
+        // ====================================================================
         m_pollScheduler->initializeChains();
         m_pollScheduler->start();
 
-        // ✅ НОВОЕ: Включаем режим Fast для быстрого первоначального опроса
-//        setFastPolling(true);
+        // При необходимости — можно включить Fast-режим (закомментировано):
+        // setFastPolling(true);
 
-        // 5. Вызываем виртуальный метод для установки параметров
+        // ====================================================================
+        // ✅ 7. УСТАНОВКА ПАРАМЕТРОВ ДОКУМЕНТА (виртуальный метод наследника)
+        // ====================================================================
         setDocumentParameters(m_fullDocument.value("parameters").toObject());
 
         qDebug() << "[BaseDocWidget] Загружен файл и запущен опрос:" << filePath;
 
-        // ✅ НОВОЕ: Автоматическое создание таблицы в БД
+        // ====================================================================
+        // ✅ 8. АВТОМАТИЧЕСКОЕ СОЗДАНИЕ ТАБЛИЦЫ В БД
+        // ====================================================================
         ensureDatabaseTable();
+
+        // ====================================================================
+        // ✅ 9. ХУК ДЛЯ НАСЛЕДНИКОВ (загрузка кэша настроек, UI и т.п.)
+        // ====================================================================
+        onFileLoaded();
 
         return true;
     }
+
     return false;
 }
 
@@ -465,6 +517,27 @@ void BaseDocWidget::loadAndValidateEquipmentConnections()
         m_equipmentConnections[i].dataBits = connObj.value("modbusDataBits").toInt(8);
         m_equipmentConnections[i].parity = connObj.value("modbusParity").toString("None");
         m_equipmentConnections[i].stopBits = connObj.value("modbusStopBits").toInt(1);
+    }
+    // ========================================================================
+    // ✅ НОВОЕ: Заполняем deviceSettings для температурных устройств
+    // (для устройств других типов — по аналогии, когда появятся настройки)
+    // ========================================================================
+    QJsonArray tempSensors = m_fullDocument.value("temperature_sensors").toArray();
+
+    for (int i = 0; i < m_equipmentConnections.size(); ++i) {
+        EquipmentConnection &conn = m_equipmentConnections[i];
+
+        if (conn.deviceId == ID_TEMP_SNS_BOREAS_3 ||
+            conn.deviceId == ID_TEMP_SNS_TE_MONITOR_V6) {
+
+            QJsonObject settings;
+            settings["sensors"] = tempSensors;
+            conn.deviceSettings = settings;
+
+            qDebug() << "[BaseDocWidget] deviceSettings заполнены для"
+                     << conn.name << "(deviceId:" << conn.deviceId
+                     << ", датчиков:" << tempSensors.size() << ")";
+        }
     }
 
     // ✅ Проверяем строки, которых нет в JSON (они остались с errorCode = 4)
@@ -635,7 +708,9 @@ void BaseDocWidget::reloadPollingSettings()
         return;
     }
 
+    // ========================================================================
     // 1. Перечитываем файл, чтобы получить актуальные настройки
+    // ========================================================================
     QFile file(m_filePath);
     if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
         qWarning() << "[BaseDocWidget] Не удалось открыть файл для перечитывания настроек";
@@ -646,34 +721,70 @@ void BaseDocWidget::reloadPollingSettings()
     m_fullDocument = doc.object();
     file.close();
 
-    // 2. Читаем новый интервал опроса
+    // ========================================================================
+    // ✅ 2. НОВОЕ: Обновляем deviceSettings в m_equipmentConnections
+    //    (чтобы драйверы получили актуальные настройки после пересоздания)
+    // ========================================================================
+    QJsonArray tempSensors = m_fullDocument.value("temperature_sensors").toArray();
+
+    for (int i = 0; i < m_equipmentConnections.size(); ++i) {
+        EquipmentConnection &conn = m_equipmentConnections[i];
+
+        if (conn.deviceId == ID_TEMP_SNS_BOREAS_3 ||
+            conn.deviceId == ID_TEMP_SNS_TE_MONITOR_V6) {
+
+            QJsonObject settings;
+            settings["sensors"] = tempSensors;
+            conn.deviceSettings = settings;
+
+            qDebug() << "[BaseDocWidget] reloadPollingSettings: deviceSettings обновлены для"
+                     << conn.name << "(датчиков:" << tempSensors.size() << ")";
+        }
+    }
+
+    // ========================================================================
+    // 3. Читаем новый интервал опроса
+    // ========================================================================
     QJsonObject settings = m_fullDocument.value("settings").toObject();
     int newInterval = settings.value("polling_interval").toInt(1000);
 
-    // Защита от слишком маленького интервала
     if (newInterval < 100) {
         qWarning() << "[BaseDocWidget] Интервал опроса слишком маленький ("
                    << newInterval << "мс), установлено 100 мс";
         newInterval = 100;
     }
 
-    // 3. Останавливаем старый опрос
+    // ========================================================================
+    // 4. Останавливаем старый опрос
+    // ========================================================================
     m_pollScheduler->stop();
 
-    // 4. Применяем новый интервал
+    // ========================================================================
+    // 5. Применяем новый интервал
+    // ========================================================================
     m_pollScheduler->setPollingInterval(newInterval);
 
-    // 5. Пересоздаём цепочки (на случай, если изменились подключения)
+    // ========================================================================
+    // 6. Пересоздаём цепочки (драйверы получат обновлённые deviceSettings)
+    // ========================================================================
     m_pollScheduler->initializeChains();
 
-    // 6. Запускаем опрос заново
+    // ========================================================================
+    // 7. Запускаем опрос заново
+    // ========================================================================
     m_pollScheduler->start();
 
-    // 7. Обновляем состояние заголовка (на случай изменения флага "в работе")
+    // ========================================================================
+    // 8. Обновляем состояние заголовка (на случай изменения флага "в работе")
+    // ========================================================================
     updateAlarmState();
 
     qDebug() << "[BaseDocWidget] Настройки опроса перезагружены. Новый интервал:"
              << newInterval << "мс";
+
+    // ✅ НОВОЕ: Вызываем хук для наследников
+    // (перечитать кэшированные настройки, обновить UI и т.п.)
+    onSettingsReloaded();
 }
 
 // ✅ НОВЫЙ МЕТОД: Отправка команды управления устройству
@@ -686,17 +797,39 @@ void BaseDocWidget::sendCommandToDevice(const QString &deviceName, const Control
 
 void BaseDocWidget::processPollResult(int chainId, int deviceIndex, std::shared_ptr<IDeviceData> data)
 {
+    Q_UNUSED(chainId);
+    Q_UNUSED(deviceIndex);
+
     if (!data) return;
 
     int deviceId = data->deviceId();
+    const DeviceErrors devErrors = data->getErrors();
 
-    // ✅ ПОТОКОБЕЗОПАСНАЯ ЗАПИСЬ: используем write lock
+    // ========================================================================
+    // ✅ ТОЛЬКО СБОР ДАННЫХ — ничего не эмитим, UI не трогаем, в БД не пишем.
+    // Вся обработка цикла — в updateUIFromBuffer() (вызывается один раз
+    // после завершения всех цепочек Fast Pool).
+    // ========================================================================
     {
         QWriteLocker locker(&m_dataLock);
+
+        // Сохраняем последние данные от устройства
         m_lastDeviceData[deviceId] = data;
+
+        // Обновляем накопленные ошибки по этому устройству.
+        // При каждом опросе ЗАМЕНЯЕМ список — аварии автоматически
+        // исчезают из m_deviceErrors, когда пропадают у устройства.
+        if (devErrors.codes.empty()) {
+            m_deviceErrors.remove(deviceId);
+        } else {
+            QList<int> codes;
+            codes.reserve(static_cast<int>(devErrors.codes.size()));
+            for (int c : devErrors.codes) codes.append(c);
+            m_deviceErrors[deviceId] = codes;
+        }
     }
 
-    // ✅ Логируем только при ошибках
+    // Логируем только при наличии ошибок
     if (data->hasErrors()) {
         qDebug() << "[BaseDocWidget] Получены данные с ошибками:"
                  << "chainId:" << chainId
@@ -704,7 +837,7 @@ void BaseDocWidget::processPollResult(int chainId, int deviceIndex, std::shared_
                  << "deviceId:" << deviceId;
     }
 
-    // ✅ При первом опросе включаем индикатор
+    // ✅ Первый опрос — включаем индикатор заголовка
     if (!m_firstPollReceived) {
         m_firstPollReceived = true;
         if (m_titleIndicator) {
@@ -712,34 +845,135 @@ void BaseDocWidget::processPollResult(int chainId, int deviceIndex, std::shared_
             qDebug() << "[BaseDocWidget] Первый опрос получен, индикатор включён";
         }
     }
+}
 
-    // ✅ Мигание индикатора при каждом цикле опроса
-    triggerIndicatorBlink();
 
-    // ✅ Обновление состояния (цвет заголовка)
+// ============================================================================
+// ✅ ФИНАЛИЗАЦИЯ ЦИКЛА ОПРОСА
+//
+// Делает:
+//   1. Обновляет цвет заголовка документа (синий/зелёный/оранжевый/красный).
+//   2. Собирает суммарный список аварий по всем устройствам документа.
+//   3. Эмитит сигнал alarmsUpdated для AlarmPanel в MainWindow,
+//      ТОЛЬКО если список аварий изменился с прошлого раза.
+// ============================================================================
+void BaseDocWidget::finalizePollCycle()
+{
+    // 1. Обновляем цвет заголовка
     updateAlarmState();
 
-    // ✅ НОВОЕ: Формируем список аварий и отправляем сигнал в MainWindow
+    // 2. Собираем суммарный список аварий
     QList<int> alarmCodes;
     QList<int> alarmStatuses;
-
     {
         QReadLocker locker(&m_dataLock);
-
-        for (const auto &deviceData : m_lastDeviceData) {
-            if (deviceData && deviceData->hasErrors()) {
-                const DeviceErrors &errors = deviceData->getErrors();
-                for (int code : errors.codes) {
-                    alarmCodes.append(code);
-                    alarmStatuses.append(AlarmRegistry::instance().getStatus(code));
-                }
+        for (auto it = m_deviceErrors.constBegin();
+             it != m_deviceErrors.constEnd(); ++it) {
+            for (int code : it.value()) {
+                alarmCodes.append(code);
+                alarmStatuses.append(AlarmRegistry::instance().getStatus(code));
             }
         }
     }
 
-    // ✅ Отправляем сигнал с полным списком аварий
-    emit alarmsUpdated(m_filePath, alarmCodes, alarmStatuses);
+    // 3. Автоочистка подтверждений
+    {
+        QSet<int> currentCodes(alarmCodes.begin(), alarmCodes.end());
+        for (auto it = m_acknowledgedAlarms.begin();
+             it != m_acknowledgedAlarms.end(); ) {
+            if (!currentCodes.contains(*it)) {
+                it = m_acknowledgedAlarms.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // 4. Фильтрация
+    QList<int> filteredCodes;
+    QList<int> filteredStatuses;
+    filteredCodes.reserve(alarmCodes.size());
+    filteredStatuses.reserve(alarmStatuses.size());
+
+    for (int i = 0; i < alarmCodes.size(); ++i) {
+        if (!m_acknowledgedAlarms.contains(alarmCodes[i])) {
+            filteredCodes.append(alarmCodes[i]);
+            filteredStatuses.append(alarmStatuses[i]);
+        }
+    }
+
+    // 5. Сортировка в currentPairs
+    QList<QPair<int, int>> currentPairs;
+    currentPairs.reserve(filteredCodes.size());
+    for (int i = 0; i < filteredCodes.size(); ++i) {
+        currentPairs.append(qMakePair(filteredCodes[i], filteredStatuses[i]));
+    }
+    std::sort(currentPairs.begin(), currentPairs.end(),
+              [](const QPair<int,int> &a, const QPair<int,int> &b) {
+                  if (a.first != b.first) return a.first < b.first;
+                  return a.second < b.second;
+              });
+
+    // ========================================================================
+    // ✅ РЕГИСТРАЦИЯ ОЗВУЧКИ — ВСЕГДА (каждый цикл).
+    //    Плеер сам решит, играть ли прямо сейчас, или подождать,
+    //    пока закончится текущая фраза. Если аварий нет — документ
+    //    удалится из очереди плеера.
+    // ========================================================================
+    {
+        const QString docBaseName = QFileInfo(m_filePath).completeBaseName();
+
+        QStringList alarmTexts;
+        alarmTexts.reserve(currentPairs.size());
+        for (const auto &p : currentPairs) {
+            alarmTexts.append(AlarmRegistry::instance().getMessage(p.first));
+        }
+
+        AlarmSoundPlayer::instance().registerDocAlarms(
+            docBaseName,
+            alarmTexts,
+            m_alarmSoundEnabled);
+    }
+
+    // 6. Сравнение с кэшем — эмитим alarmsUpdated только при изменении
+    bool changed = false;
+    if (!m_alarmsCacheInitialized) {
+        changed = true;
+    } else if (currentPairs.size() != m_lastSentAlarmCodes.size()) {
+        changed = true;
+    } else {
+        for (int i = 0; i < currentPairs.size(); ++i) {
+            if (currentPairs[i].first != m_lastSentAlarmCodes[i] ||
+                currentPairs[i].second != m_lastSentAlarmStatuses[i]) {
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    if (!changed) {
+        return;
+    }
+
+    // 7. Обновление кэша
+    m_lastSentAlarmCodes.clear();
+    m_lastSentAlarmStatuses.clear();
+    m_lastSentAlarmCodes.reserve(currentPairs.size());
+    m_lastSentAlarmStatuses.reserve(currentPairs.size());
+    for (const auto &p : qAsConst(currentPairs)) {
+        m_lastSentAlarmCodes.append(p.first);
+        m_lastSentAlarmStatuses.append(p.second);
+    }
+    m_alarmsCacheInitialized = true;
+
+    // 8. Эмит сигнала
+    emit alarmsUpdated(m_filePath,
+                       m_lastSentAlarmCodes,
+                       m_lastSentAlarmStatuses,
+                       lastCycleTime());
 }
+
+
 
 // ✅ НОВЫЙ МЕТОД: Обновление цвета заголовка на основе аварий
 void BaseDocWidget::updateAlarmState()
@@ -792,11 +1026,12 @@ void BaseDocWidget::triggerIndicatorBlink()
 {
     if (!m_titleIndicator) return;
 
-    // ✅ Используем встроенный метод trigger() из LedIndicator
-    // Он загорается текущим цветом и автоматически гаснет через 300 мс
-    m_titleIndicator->trigger(300);
+    // ✅ В Fast режиме цикл ~100 мс — триггер 100 мс,
+    //    чтобы индикатор мигал, а не горел постоянно.
+    //    В обычном — цикл ~1000 мс — триггер 300 мс.
+    const int duration = isFastPolling() ? 100 : 300;
+    m_titleIndicator->trigger(duration);
 }
-
 
 // ✅ НОВЫЙ МЕТОД: Включить/выключить режим быстрого опроса
 void BaseDocWidget::setFastPolling(bool enabled)
@@ -818,73 +1053,7 @@ bool BaseDocWidget::isFastPolling() const
     return m_pollScheduler->isFastMode();
 }
 
-// ============================================================================
-// ✅ НОВЫЙ МЕТОД: Конвертация "сырых" данных в унифицированную TemperaturaData
-// ============================================================================
-std::shared_ptr<TemperaturaData> BaseDocWidget::convertToTemperatureData(
-    int deviceId,
-    const std::shared_ptr<IDeviceData>& rawData) const
-{
-    if (!rawData) return nullptr;
 
-    auto result = std::make_shared<TemperaturaData>(deviceId);
-
-    // ✅ Случай 1: Данные от Boreas 3 (4 датчика)
-    if (auto boreasData = std::dynamic_pointer_cast<Boreas3Data>(rawData)) {
-        result->activeCount = 4;
-        for (int i = 0; i < 4; ++i) {
-            result->temperatures[i] = boreasData->temperatures[i];
-            result->alarms[i] = boreasData->alarms[i];
-        }
-        // Копируем ошибки
-        result->errors = boreasData->errors;
-        return result;
-    }
-
-    // ✅ Случай 2: Данные от TE Monitor V6 (8 датчиков)
-    if (auto teData = std::dynamic_pointer_cast<TEMonitorV6Data>(rawData)) {
-        result->activeCount = 8;
-        for (int i = 0; i < 8; ++i) {
-            result->temperatures[i] = teData->temperatures[i];
-            // Распаковываем битовую маску в массив статусов
-            result->alarms[i] = (teData->alarmStatus >> i) & 0x01;
-        }
-        // Копируем ошибки
-        result->errors = teData->errors;
-        return result;
-    }
-
-    // ✅ Случай 3: Неизвестный тип драйвера
-    qWarning() << "[BaseDocWidget] convertToTemperatureData: неизвестный тип данных для deviceId:" << deviceId;
-    return nullptr;
-}
-
-// ============================================================================
-// ✅ НОВЫЙ МЕТОД: Получить унифицированные данные температуры для слота
-// ============================================================================
-std::shared_ptr<TemperaturaData> BaseDocWidget::getTemperatureDataForSlot(int slotIndex) const
-{
-    // 1. Проверка корректности индекса
-    if (slotIndex < 0 || slotIndex >= m_equipmentConnections.size()) {
-        qWarning() << "[BaseDocWidget] getTemperatureDataForSlot: некорректный slotIndex:" << slotIndex;
-        return nullptr;
-    }
-
-    // 2. Получаем deviceId из слота
-    const EquipmentConnection &conn = m_equipmentConnections[slotIndex];
-    if (conn.deviceId == ID_UNKNOWN) {
-        return nullptr;  // Устройство не выбрано
-    }
-
-    // 3. Получаем "сырые" данные из буфера
-    auto rawData = getDeviceData(conn.deviceId);
-    if (!rawData) {
-        return nullptr;  // Данные ещё не получены
-    }
-
-    // 4. Конвертируем в унифицированный формат
-    return convertToTemperatureData(conn.deviceId, rawData);
-}
 
 
 int BaseDocWidget::databaseDocTypeCode() const
@@ -935,8 +1104,166 @@ void BaseDocWidget::onViewDataGraph()
         return;
     }
 
-    // Создаём и показываем диалог
-    DataViewDialog *dlg = new DataViewDialog(m_filePath, docType, this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);  // ✅ Автоматическое удаление при закрытии
-    dlg->show();  // ✅ Не модальное окно, чтобы можно было работать с основным приложением
+    // ✅ Модальный диалог — создаём на стеке и вызываем exec()
+    DataViewDialog dlg(m_filePath, docType, this);
+    dlg.exec();
+}
+
+// ============================================================================
+// ✅ ЕДИНАЯ проверка: пора ли писать в БД.
+//
+// Флаг выставляется, если сработала ХОТЯ БЫ ОДНА причина:
+//   1) сработал таймер db_write_interval;
+//   2) есть авария (ErrorsAll не пуст) и «окно аварийной записи»
+//      (alarm_write_duration_min минут) ещё не истекло.
+//
+// Окно аварийной записи:
+//   • открывается при первом появлении аварии (m_msSinceAlarmWindowStart = 0 → += polling),
+//   • накапливает интервалы опроса, пока авария есть,
+//   • сбрасывается при пропадании аварии,
+//   • при истечении alarm_write_duration_min — окно перестаёт
+//     возвращать true, но счётчик НЕ сбрасывается (иначе окно
+//     переоткроется на следующем цикле, пока авария ещё висит).
+// ============================================================================
+bool BaseDocWidget::shouldWriteToDb(const QString &errorsAll)
+{
+    const QJsonObject settings = m_fullDocument.value("settings").toObject();
+    int pollingInterval   = settings.value("polling_interval").toInt(1000);
+    int dbWriteInterval   = settings.value("db_write_interval").toInt(5000);
+    int alarmWriteMinutes = settings.value("alarm_write_duration_min").toInt(5);
+
+    if (pollingInterval   < 1)    pollingInterval   = 1;
+    if (dbWriteInterval   < 1)    dbWriteInterval   = 1;
+    if (alarmWriteMinutes < 0)    alarmWriteMinutes = 0;
+    if (alarmWriteMinutes > 1440) alarmWriteMinutes = 1440;
+
+    // ------------------------------------------------------------------------
+    // 1. Причина по таймеру
+    // ------------------------------------------------------------------------
+    bool byTimer = false;
+    if (dbWriteInterval <= pollingInterval) {
+        byTimer = true;
+    } else {
+        m_msSinceLastDbWrite += pollingInterval;
+        if (m_msSinceLastDbWrite >= dbWriteInterval) {
+            byTimer = true;
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. Причина по аварии
+    // ------------------------------------------------------------------------
+    bool byAlarm = false;
+
+    int alarmCount = 0;
+    if (!errorsAll.isEmpty()) {
+        const QStringList parts = errorsAll.split(';', Qt::SkipEmptyParts);
+        if (!parts.isEmpty()) {
+            bool ok = false;
+            alarmCount = parts.first().toInt(&ok);
+            if (!ok) alarmCount = 0;
+        }
+    }
+    const bool hasAlarm = (alarmCount > 0);
+
+    if (!hasAlarm) {
+        // Аварии нет — окно закрыто.
+        m_msSinceAlarmWindowStart = 0;
+    } else {
+        // Авария есть.
+        const qint64 alarmWriteMs = static_cast<qint64>(alarmWriteMinutes) * 60 * 1000;
+
+        if (m_msSinceAlarmWindowStart == 0) {
+            // Окно ещё не открыто — открываем (записываем первый интервал).
+            m_msSinceAlarmWindowStart = pollingInterval;
+            byAlarm = true;
+        } else {
+            // Окно открыто — накапливаем интервал.
+            m_msSinceAlarmWindowStart += pollingInterval;
+            // Пишем, пока не истекло.
+            // Счётчик НЕ сбрасываем при истечении — иначе окно
+            // переоткроется на следующем цикле, пока авария ещё висит.
+            byAlarm = (m_msSinceAlarmWindowStart < alarmWriteMs);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. Итог: пишем, если сработала любая причина
+    // ------------------------------------------------------------------------
+    const bool write = (byTimer || byAlarm);
+
+    // Сбрасываем счётчик таймера, если пишем — «сдвигаем» момент
+    // следующей записи по таймеру, чтобы не было двух подряд.
+    if (write) {
+        m_msSinceLastDbWrite = 0;
+    }
+
+    return write;
+}
+
+// ============================================================================
+// Собирает строку ErrorsAll по ВСЕМ устройствам документа.
+// Формат: "N;code1;code2;...;"  (совместим с MeasurementsModel)
+// Пустой список → "0;"
+// ============================================================================
+QString BaseDocWidget::buildErrorsAllString() const
+{
+    // Собираем все коды со всех устройств
+    QList<int> allCodes;
+
+    {
+        QReadLocker locker(&m_dataLock);
+        for (auto it = m_deviceErrors.constBegin();
+             it != m_deviceErrors.constEnd(); ++it) {
+            allCodes.append(it.value());
+        }
+    }
+
+    if (allCodes.isEmpty()) {
+        return QStringLiteral("0;");
+    }
+
+    QStringList parts;
+    parts.reserve(allCodes.size() + 1);
+    parts << QString::number(allCodes.size());
+    for (int code : allCodes) {
+        parts << QString::number(code);
+    }
+    return parts.join(';') + ';';
+}
+
+QDateTime BaseDocWidget::lastCycleTime() const
+{
+    if (m_pollScheduler) {
+        return m_pollScheduler->lastTimePoolTime();
+    }
+    return QDateTime();
+}
+
+void BaseDocWidget::onAlarmAcknowledged(int code)
+{
+    // 1. Добавляем в кэш.
+    m_acknowledgedAlarms.insert(code);
+
+    // 2. Запись в журнал действий пользователей.
+    //    Журнал фиксирует ФАКТ подтверждения для аудита,
+    //    даже если подтверждение не переживёт перезапуск.
+    const QString docName = QFileInfo(m_filePath).completeBaseName();
+    const QString alarmText = AlarmRegistry::instance().getMessage(code);
+
+    DatabaseManager::instance().logUserAction(
+        "Аварии",
+        docName,
+        QString("Подтверждена авария [%1]: %2")
+            .arg(code)
+            .arg(alarmText)
+    );
+
+    // 3. Форсируем пересборку списка аварий — это исключит подтверждённые
+    //    из alarmsUpdated и уберёт панель, если аварий больше нет.
+    m_lastSentAlarmCodes.clear();
+    m_lastSentAlarmStatuses.clear();
+    m_alarmsCacheInitialized = false;
+
+    finalizePollCycle();
 }

@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1111</width>
-    <height>614</height>
+    <width>1800</width>
+    <height>960</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -20,48 +20,36 @@
       <enum>Qt::Horizontal</enum>
      </property>
      <widget class="QSplitter" name="centerSplitter">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
       <property name="orientation">
        <enum>Qt::Vertical</enum>
       </property>
-      <widget class="QCustomPlot" name="graph" native="true"/>
-      <widget class="QTableWidget" name="tableData">
-       <property name="editTriggers">
-        <set>QAbstractItemView::NoEditTriggers</set>
-       </property>
-       <property name="alternatingRowColors">
-        <bool>true</bool>
-       </property>
-       <property name="selectionBehavior">
-        <enum>QAbstractItemView::SelectRows</enum>
-       </property>
-      </widget>
-      <widget class="QTableWidget" name="tableJournal">
-       <property name="editTriggers">
-        <set>QAbstractItemView::NoEditTriggers</set>
-       </property>
-       <property name="columnCount">
-        <number>2</number>
-       </property>
-       <column>
-        <property name="text">
-         <string>Время</string>
-        </property>
-       </column>
-       <column>
-        <property name="text">
-         <string>Описание аварии</string>
-        </property>
-       </column>
-      </widget>
       <widget class="QGroupBox" name="filterGroup">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>75</height>
+        </size>
+       </property>
        <property name="maximumSize">
         <size>
          <width>16777215</width>
-         <height>95</height>
+         <height>75</height>
         </size>
        </property>
        <property name="title">
-        <string>Диапазон дат</string>
+        <string>Выберите диапазон дат</string>
        </property>
        <layout class="QHBoxLayout" name="filterLayout">
         <item>
@@ -79,6 +67,12 @@
         </item>
         <item>
          <widget class="QDateEdit" name="dateStart">
+          <property name="minimumSize">
+           <size>
+            <width>100</width>
+            <height>0</height>
+           </size>
+          </property>
           <property name="displayFormat">
            <string>dd.MM.yyyy</string>
           </property>
@@ -96,6 +90,12 @@
         </item>
         <item>
          <widget class="QDateEdit" name="dateEnd">
+          <property name="minimumSize">
+           <size>
+            <width>100</width>
+            <height>0</height>
+           </size>
+          </property>
           <property name="displayFormat">
            <string>dd.MM.yyyy</string>
           </property>
@@ -119,6 +119,13 @@
          </widget>
         </item>
         <item>
+         <widget class="QPushButton" name="btnGraphMode">
+          <property name="text">
+           <string> Показать график детально </string>
+          </property>
+         </widget>
+        </item>
+        <item>
          <spacer name="horizontalSpacer">
           <property name="orientation">
            <enum>Qt::Horizontal</enum>
@@ -132,9 +139,116 @@
          </spacer>
         </item>
         <item>
+         <widget class="QLabel" name="labelCoordinates">
+          <property name="minimumSize">
+           <size>
+            <width>250</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>Время: --   Значение: --</string>
+          </property>
+         </widget>
+        </item>
+        <item>
          <widget class="QLabel" name="statusLabel">
           <property name="text">
            <string>Готов к загрузке</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QTableView" name="tableJournal">
+       <property name="editTriggers">
+        <set>QAbstractItemView::NoEditTriggers</set>
+       </property>
+       <property name="alternatingRowColors">
+        <bool>true</bool>
+       </property>
+       <property name="selectionMode">
+        <enum>QAbstractItemView::SingleSelection</enum>
+       </property>
+       <property name="selectionBehavior">
+        <enum>QAbstractItemView::SelectRows</enum>
+       </property>
+      </widget>
+      <widget class="QTableView" name="tableData">
+       <property name="maximumSize">
+        <size>
+         <width>16777215</width>
+         <height>16777215</height>
+        </size>
+       </property>
+       <property name="editTriggers">
+        <set>QAbstractItemView::NoEditTriggers</set>
+       </property>
+       <property name="alternatingRowColors">
+        <bool>true</bool>
+       </property>
+       <property name="selectionMode">
+        <enum>QAbstractItemView::SingleSelection</enum>
+       </property>
+       <property name="selectionBehavior">
+        <enum>QAbstractItemView::SelectRows</enum>
+       </property>
+      </widget>
+      <widget class="QWidget" name="graphContainer" native="true">
+       <layout class="QVBoxLayout" name="graphContainerLayout">
+        <property name="spacing">
+         <number>2</number>
+        </property>
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>0</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="BorderedCustomPlot" name="graph" native="true">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+            <horstretch>0</horstretch>
+            <verstretch>1</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>200</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSlider" name="sliderGraph">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>24</height>
+           </size>
+          </property>
+          <property name="visible">
+           <bool>false</bool>
+          </property>
+          <property name="tracking">
+           <bool>true</bool>
+          </property>
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
           </property>
          </widget>
         </item>
@@ -144,7 +258,7 @@
      <widget class="QGroupBox" name="journalGroup">
       <property name="maximumSize">
        <size>
-        <width>250</width>
+        <width>300</width>
         <height>16777215</height>
        </size>
       </property>
@@ -168,23 +282,13 @@
      </widget>
     </widget>
    </item>
-   <item>
-    <widget class="QProgressBar" name="progress">
-     <property name="visible">
-      <bool>false</bool>
-     </property>
-     <property name="value">
-      <number>0</number>
-     </property>
-    </widget>
-   </item>
   </layout>
  </widget>
  <customwidgets>
   <customwidget>
-   <class>QCustomPlot</class>
+   <class>BorderedCustomPlot</class>
    <extends>QWidget</extends>
-   <header>qcustomplot.h</header>
+   <header>borderedcustomplot.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>

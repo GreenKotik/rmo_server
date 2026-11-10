@@ -93,8 +93,22 @@ void AntennaWidget::saveToFile()
 
 void AntennaWidget::processDocClientData(const QJsonObject &data)
 {
-    // Применение данных, полученных от сервера или другого клиента по сети
-    // Важно: обновляем UI только если данные действительно пришли, чтобы не сбрасывать их в пустоту
+    // ✅ Обрабатываем сетевой пакет "AntennaDataUpdate"
+    if (data.value("action").toString() == "AntennaDataUpdate") {
+        const QJsonObject payload = data.value("data").toObject();
+        const bool writeToDb = payload.value("write_to_db").toBool(false);
+
+        if (writeToDb && !m_filePath.isEmpty()) {
+            const bool ok = DatabaseManager::instance().logDocumentData(
+                m_filePath, 1, payload);
+            if (!ok) {
+                qWarning() << "[AntennaWidget/CLIENT] ❌ Не удалось записать в БД";
+            }
+        }
+        return;
+    }
+
+    // ✅ Обрабатываем сетевой пакет "doc_update" (правки полей UI)
     if (data.contains("name")) {
         ui->nameEdit->setText(data["name"].toString());
     }
