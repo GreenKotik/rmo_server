@@ -52,6 +52,14 @@ void PollScheduler::initializeChains()
 
     // ✅ НОВОЕ: Сбрасываем счётчик цепочек, чтобы ID не росли бесконечно
     m_chainCounter = 0;
+    m_fastCycleInProgress = false;   // ✅ ДОБАВИТЬ
+    m_slowCycleInProgress = false;   // ✅ ДОБАВИТЬ
+
+    // ✅ Сброс Time Pool времени при пересоздании
+    {
+        QMutexLocker locker(&m_timePoolMutex);
+        m_lastTimePoolTime = QDateTime();
+    }
 
     // Получаем подключения из документа
     QList<EquipmentConnection> connections = m_docWidget->getEquipmentConnections();
@@ -59,10 +67,17 @@ void PollScheduler::initializeChains()
     qDebug() << "[PollScheduler] Инициализация цепочек, подключений:" << connections.size();
 
     // Фильтруем только валидные подключения
-    QList<EquipmentConnection> validConnections;
-    for (const EquipmentConnection &conn : connections) {
+
+
+
+    // Пары (подключение, исходный индекс в m_equipmentConnections)
+    using ConnWithIndex = std::pair<EquipmentConnection, int>;
+    QList<ConnWithIndex> validConnections;
+
+    for (int i = 0; i < connections.size(); ++i) {
+        const EquipmentConnection &conn = connections[i];
         if (conn.errorCode == 0 && conn.connected && conn.deviceId != ID_UNKNOWN) {
-            validConnections.append(conn);
+                validConnections.append(std::make_pair(conn, i));
         } else {
             qDebug() << "[PollScheduler] Пропущено устройство:" << conn.name
                      << "(errorCode:" << conn.errorCode
@@ -71,24 +86,30 @@ void PollScheduler::initializeChains()
         }
     }
 
+
     if (validConnections.isEmpty()) {
         qWarning() << "[PollScheduler] Нет валидных подключений для опроса!";
         return;
     }
 
     // Группируем устройства в цепочки
-    std::vector<std::vector<EquipmentConnection>> chains;
-    std::vector<EquipmentConnection> currentChain;
+    // Группировка в цепочки — по-прежнему по useStream, но с сохранением индексов
+    std::vector<std::vector<ConnWithIndex>> chains;
+    std::vector<ConnWithIndex> currentChain;
 
-    for (const EquipmentConnection &conn : validConnections) {
+    for (const ConnWithIndex &pair : validConnections) {
+        const EquipmentConnection &conn = pair.first;
         if (conn.useStream || currentChain.empty()) {
             if (!currentChain.empty()) {
                 chains.push_back(currentChain);
                 currentChain.clear();
             }
         }
-        currentChain.push_back(conn);
+        currentChain.push_back(pair);
     }
+    if (!currentChain.empty()) chains.push_back(currentChain);
+
+
 
     if (!currentChain.empty()) {
         chains.push_back(currentChain);
@@ -103,28 +124,40 @@ void PollScheduler::initializeChains()
         // ✅ Создаём цепочку
         PollChain *chain = new PollChain(chainId);
 
-        // ✅ КРИТИЧЕСКИ ВАЖНО: Добавляем драйверы ДО перемещения в поток!
-        for (const EquipmentConnection &conn : chainDevices) {
-            auto driver = DriverFactory::createDriver(conn.deviceId, chain);
+        // ✅ Драйверы создаются БЕЗ parent (nullptr) — иначе их
+        //    нельзя будет переместить в рабочий поток через
+        //    moveToThread() (Qt выдаст "Cannot move objects with a parent").
+        for (const ConnWithIndex &pair : chainDevices) {
+            const EquipmentConnection &conn = pair.first;
+            const int slotIndex = pair.second;   // ← исходный индекс в m_equipmentConnections
+
+            auto driver = DriverFactory::createDriver(conn.deviceId, nullptr);
             if (driver) {
-                chain->addDriver(std::move(driver), conn);
+                chain->addDriver(std::move(driver), conn, slotIndex);   // ← 3-й аргумент
             } else {
                 qWarning() << "[PollScheduler] Не удалось создать драйвер для:"
                            << conn.name << "(deviceId:" << conn.deviceId << ")";
             }
         }
-        // ✅ НОВОЕ: Пропускаем пустые цепочки (нет валидных драйверов)
+        // ✅ Пропускаем пустые цепочки (нет валидных драйверов)
         if (chain->deviceCount() == 0) {
-            qWarning() << "[PollScheduler] Цепочка" << chainId << "пустая (нет валидных драйверов), пропускаем";
+            qWarning() << "[PollScheduler] Цепочка" << chainId
+                       << "пустая (нет валидных драйверов), пропускаем";
             delete chain;
-            continue;  // ✅ Переходим к следующей цепочке
+            continue;
         }
 
         // ✅ Создаём QThread для цепочки
         QThread *thread = new QThread(this);
 
-        // ✅ ТЕПЕРЬ перемещаем цепочку в поток (после добавления драйверов)
+        // ✅ Перемещаем цепочку в рабочий поток
         chain->moveToThread(thread);
+
+        // ✅ КРИТИЧЕСКИ ВАЖНО: перемещаем ВСЕХ драйверов в тот же поток.
+        //    moveToThread(chain) НЕ перемещает детей автоматически.
+        //    А так как драйверы созданы без parent — moveToThread
+        //    сработает корректно.
+        chain->moveDriversToThread(thread);
 
         // ✅ Подключаем общие сигналы
         connect(chain, &PollChain::pollResult, this, &PollScheduler::onPollResult);
@@ -144,11 +177,8 @@ void PollScheduler::initializeChains()
         // ✅ ОПРЕДЕЛЯЕМ ПУЛ ЦЕПОЧКИ на основе поля slowPool
         // Если хотя бы одно устройство в цепочке помечено как slowPool — вся цепочка в Slow Pool
         bool shouldBeSlow = false;
-        for (const EquipmentConnection &conn : chainDevices) {
-            if (conn.slowPool) {
-                shouldBeSlow = true;
-                break;
-            }
+        for (const ConnWithIndex &pair : chainDevices) {
+            if (pair.first.slowPool) { shouldBeSlow = true; break; }
         }
         if (shouldBeSlow) {
             // ✅ Цепочка в Slow Pool
@@ -244,8 +274,14 @@ void PollScheduler::stop()
     m_slowChains.clear();
     m_threads.clear();
 
+    // ✅ НОВОЕ: обнуляем указатели на Time Pool
+    m_timePoolChain = nullptr;
+    m_timePoolThread = nullptr;
+
     m_fastActiveChains = 0;
     m_slowActiveChains = 0;
+    m_fastCycleInProgress = false;   // ✅ ДОБАВИТЬ
+    m_slowCycleInProgress = false;   // ✅ ДОБАВИТЬ
 
     qDebug() << "[PollScheduler] Остановлен корректно";
 }
@@ -261,67 +297,74 @@ void PollScheduler::setFastMode(bool enabled)
     m_fastMode = enabled;
 
     if (m_fastMode) {
-        m_pollTimer->stop();  // Останавливаем обычный таймер
-        QTimer::singleShot(100, this, &PollScheduler::startPollCycle);
-        qDebug() << "[PollScheduler] Режим Fast включён (интервал: 100 мс)";
+        // ✅ Таймер НЕ трогаем — он нужен для Slow Pool.
+        //    Fast Pool теперь перезапускается через onFastCycleFinished.
+        QTimer::singleShot(0, this, &PollScheduler::startPollCycle);
+        qDebug() << "[PollScheduler] Режим Fast включён "
+                    "(Fast Pool — непрерывно, Slow Pool — по таймеру)";
     } else {
-        m_pollTimer->start();  // Возвращаемся к обычному интервалу
-        qDebug() << "[PollScheduler] Режим Fast выключен (интервал:"
+        // ✅ Таймер продолжает работать как обычно
+        qDebug() << "[PollScheduler] Режим Fast выключен "
+                    "(оба пула — по таймеру, интервал:"
                  << m_pollTimer->interval() << "мс)";
     }
 }
 
 void PollScheduler::sendCommand(const QString &deviceName, const ControlCommand &cmd)
 {
-    // Ищем цепочку в обоих пулах
-    for (size_t i = 0; i < m_fastChains.size(); ++i) {
-        PollChain *chain = m_fastChains[i];
-        QMetaObject::invokeMethod(chain, "enqueueCommand", Qt::QueuedConnection,
-                                  Q_ARG(int, 0),
-                                  Q_ARG(ControlCommand, cmd));
-        qDebug() << "[PollScheduler] Команда отправлена в Fast цепочку" << (i + 1);
+    if (cmd.slotIndex < 0) {
+        qWarning() << "[PollScheduler] Команда без slotIndex, адресация невозможна:"
+                   << deviceName;
         return;
     }
-    for (size_t i = 0; i < m_slowChains.size(); ++i) {
-        PollChain *chain = m_slowChains[i];
-        QMetaObject::invokeMethod(chain, "enqueueCommand", Qt::QueuedConnection,
-                                  Q_ARG(int, 0),
-                                  Q_ARG(ControlCommand, cmd));
-        qDebug() << "[PollScheduler] Команда отправлена в Slow цепочку" << (i + 1);
-        return;
+
+    for (PollChain *chain : m_fastChains) {
+        if (chain->hasSlot(cmd.slotIndex)) {
+            QMetaObject::invokeMethod(chain, "enqueueCommand", Qt::QueuedConnection,
+                                      Q_ARG(ControlCommand, cmd));
+            qDebug() << "[PollScheduler] Команда отправлена в Fast цепочку"
+                     << chain->getId() << "слот:" << cmd.slotIndex;
+            return;
+        }
     }
-    qWarning() << "[PollScheduler] Не найдена цепочка для устройства:" << deviceName;
+    for (PollChain *chain : m_slowChains) {
+        if (chain->hasSlot(cmd.slotIndex)) {
+            QMetaObject::invokeMethod(chain, "enqueueCommand", Qt::QueuedConnection,
+                                      Q_ARG(ControlCommand, cmd));
+            qDebug() << "[PollScheduler] Команда отправлена в Slow цепочку"
+                     << chain->getId() << "слот:" << cmd.slotIndex;
+            return;
+        }
+    }
+
+    qWarning() << "[PollScheduler] Не найдена цепочка со слотом" << cmd.slotIndex
+               << "(устройство:" << deviceName << ")";
 }
 
 void PollScheduler::startPollCycle()
 {
-    // ✅ НОВОЕ: Сигналим о начале цикла опроса
-    emit cycleStarted();
-
-    // ✅ Запускаем Fast Pool (если в нём есть цепочки)
-    if (!m_fastChains.empty()) {
-        m_fastActiveChains = m_fastChains.size();
-        for (PollChain *chain : m_fastChains) {
-            QMetaObject::invokeMethod(chain, "runPollCycle", Qt::QueuedConnection);
+    if (!m_fastMode && !m_fastCycleInProgress)
+    {
+        if (!m_fastChains.empty()) {
+            emit cycleStarted();
+            m_fastCycleInProgress = true;
+            m_fastActiveChains = static_cast<int>(m_fastChains.size());
+            for (PollChain *chain : m_fastChains) {
+                QMetaObject::invokeMethod(chain, "runPollCycle", Qt::QueuedConnection);
+            }
+        } else {
+            // Сюда мы больше не попадём, но пусть будет:
+            emit cycleStarted();
+            emit allCyclesFinished();
         }
-    } else {
-        m_fastActiveChains = 0;
     }
 
-    // ✅ Запускаем Slow Pool (если в нём есть цепочки)
-    if (!m_slowChains.empty()) {
-        m_slowActiveChains = m_slowChains.size();
+    if (!m_slowChains.empty() && !m_slowCycleInProgress) {
+        m_slowCycleInProgress = true;
+        m_slowActiveChains = static_cast<int>(m_slowChains.size());
         for (PollChain *chain : m_slowChains) {
             QMetaObject::invokeMethod(chain, "runPollCycle", Qt::QueuedConnection);
         }
-    } else {
-        m_slowActiveChains = 0;
-    }
-
-    // ✅ КРИТИЧЕСКИ ВАЖНО: Обновляем GUI, если Fast Pool пуст
-    // Это гарантирует, что GUI обновляется даже когда все цепочки в Slow Pool
-    if (m_fastActiveChains == 0) {
-        emit allCyclesFinished();
     }
 }
 
@@ -337,44 +380,42 @@ void PollScheduler::onCommandExecuted(int chainId, int deviceIndex, bool success
 
 void PollScheduler::onFastCycleFinished(int chainId)
 {
-    // ✅ Проверяем, что цепочка действительно в Fast Pool
-    PoolType currentPool;
-    PollChain *chain = findChainById(chainId, currentPool);
-
-    if (!chain || currentPool != PoolType::Fast) {
-        // Цепочка уже мигрировала в Slow Pool, игнорируем
-        return;
-    }
+    Q_UNUSED(chainId);
 
     m_fastActiveChains--;
+    if (m_fastActiveChains < 0) {
+        m_fastActiveChains = 0;
+    }
 
-    if (m_fastActiveChains == 0) {
-        // ✅ Fast Pool завершил цикл → обновляем GUI
+    if (m_fastActiveChains <= 0) {
+        m_fastActiveChains = 0;
+        m_fastCycleInProgress = false;
+
+        // ✅ Fast Pool завершён — точка записи в БД и рассылки клиентам
         emit allCyclesFinished();
 
-        // ✅ Если включён режим Fast, перезапускаем цикл через 100 мс
-        if (m_fastMode) {
+        // Fast-режим — перезапуск вне таймера
+        if (m_fastMode && !m_fastChains.empty()) {
             QTimer::singleShot(100, this, &PollScheduler::startPollCycle);
         }
+        // Иначе — следующий запуск по тику таймера
     }
 }
 
 void PollScheduler::onSlowCycleFinished(int chainId)
 {
-    // ✅ Проверяем, что цепочка действительно в Slow Pool
-    PoolType currentPool;
-    PollChain *chain = findChainById(chainId, currentPool);
-
-    if (!chain || currentPool != PoolType::Slow) {
-        // Цепочка уже мигрировала в Fast Pool, игнорируем
-        return;
-    }
+    Q_UNUSED(chainId);
 
     m_slowActiveChains--;
+    if (m_slowActiveChains < 0) {
+        m_slowActiveChains = 0;
+    }
 
-    if (m_slowActiveChains == 0) {
-        // ✅ Slow Pool завершил цикл. Данные уже безопасно записаны в m_lastDeviceData.
-        // GUI НЕ обновляем — он обновляется по сигналу от Fast Pool или по таймеру.
+    if (m_slowActiveChains <= 0) {
+        m_slowActiveChains = 0;
+        m_slowCycleInProgress = false;
+
+        // Slow Pool ничего не эмитит — ни записи, ни рассылки.
     }
 }
 
@@ -385,6 +426,12 @@ void PollScheduler::onErrorOccurred(int chainId, int deviceIndex, const QString 
 
 void PollScheduler::onConnectionLost(int chainId)
 {
+    // ✅ Защита: Time Pool никогда не мигрирует
+    if (m_timePoolChain && m_timePoolChain->getId() == chainId) {
+        qDebug() << "[PollScheduler] Time Pool проигнорирован в onConnectionLost";
+        return;
+    }
+
     PoolType currentPool;
     PollChain *chain = findChainById(chainId, currentPool);
 

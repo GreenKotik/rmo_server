@@ -6,12 +6,15 @@
 #include "snmpclient.h"
 #include "basedocwidget.h"
 #include <QDebug>
+#include <QJsonObject>
+#include <QJsonArray>
 
 // ============================================================================
 // ✅ SNMP-ДРАЙВЕР ДЛЯ ДАТЧИКА ТЕМПЕРАТУРЫ TE MONITOR V6
 // Протокол: SNMP v1
-// 8 датчиков температуры + битовая маска аварий (бит i = датчик i+1)
-// Коды аварий: 633-640 (Неисправен датчик температуры №1-8)
+// 4 датчика температуры + битовая маска аварий (бит i = датчик i+1)
+// Настройки (тип датчика, поправка, пределы) хранятся в m_settings["sensors"]
+// (массив из 4 объектов, полученный из файла документа).
 // ============================================================================
 class TEMonitorV6Driver : public IDeviceDriver
 {
@@ -23,6 +26,7 @@ public:
     bool connect() override;
     void disconnect() override;
     void setConnectionParams(const EquipmentConnection &conn) override;
+    void setDeviceSettings(const QJsonObject &settings) override;
     std::shared_ptr<IDeviceData> poll() override;
     bool executeCommand(const ControlCommand &cmd) override;
 
@@ -32,17 +36,27 @@ private:
     int m_port;
     QString m_community;
 
+    // ✅ Настройки датчиков (из файла документа)
+    QJsonObject m_settings;
+
     // Базовый OID
     static const QString OID_BASE;
 
-    // OID для 8 температур
-    static const QString OID_TEMP[8];
+    // OID для 4 температур
+    static const QString OID_TEMP[4];
 
     // OID для битовой маски аварий
     static const QString OID_ALARM_STATUS;
 
-    // Коды аварий для каждого датчика (бит i → код 633+i)
-    static constexpr int ALARM_CODE_BASE = 633;
+    // ✅ Коды аварий для проверки пределов
+    static constexpr int ALARM_TOP_BASE    = 4500;  // 4500..4503
+    static constexpr int ALARM_BOTTOM_BASE = 4510;  // 4510..4513
+
+    // ✅ Коды аварий для неисправности датчиков (бит i = код 633+i)
+    static constexpr int ALARM_SENSOR_BASE = 633;
+
+    // ✅ Вспомогательный метод: применить настройки датчиков к TemperaturaData
+    void applySettingsAndCheckLimits(std::shared_ptr<TemperaturaData> &data);
 };
 
 #endif // TEMONITORV6DRIVER_H

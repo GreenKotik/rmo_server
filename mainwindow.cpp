@@ -15,6 +15,8 @@
 #include "databaseinitwizard.h"
 #include "alarmregistry.h"
 #include "dataviewdialog.h"
+#include "useractionlogdialog.h"
+#include "driverconfigeditordialog.h"
 #include <QSqlDatabase>
 #include <QMenuBar>
 #include <QMenu>
@@ -38,21 +40,88 @@
 
 MainWindow::MainWindow(AppMode mode, const QJsonObject &clientConfig, QWidget *parent)
     : QMainWindow(parent),
-      mdiArea(new QMdiArea(this)),
       m_net(new NetworkController(mode, this)),
       m_mode(mode)
 {
-    setCentralWidget(mdiArea);
-
-    // ✅ ЯВНО ВКЛЮЧАЕМ ПОЛОСЫ ПРОКРУТКИ ДЛЯ QMdiArea
-    mdiArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    mdiArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-
-    // ✅ ЗАПРЕЩАЕМ автоматическую максимизацию подокон, чтобы они не перекрывали скроллбары
-    mdiArea->setOption(QMdiArea::DontMaximizeSubWindowOnActivation, true);
-
-    connect(mdiArea, &QMdiArea::subWindowActivated, this, &MainWindow::updateWindowTitle);
+    // ✅ Загружаем конфиг первым делом — от него зависит состав вкладок.
     loadAppConfig();
+    loadConfig();
+
+    // ========================================================================
+    // ✅ Создаём инфраструктуру групп: QTabBar сверху + QStackedWidget снизу.
+    // ========================================================================
+    QWidget *central = new QWidget(this);
+    QVBoxLayout *centralLayout = new QVBoxLayout(central);
+    centralLayout->setContentsMargins(0, 0, 0, 0);
+    centralLayout->setSpacing(0);
+
+    m_groupTabs = new AlarmTabBar(central);
+    m_groupTabs->setExpanding(false);
+    m_groupTabs->setDrawBase(true);
+    m_groupStack = new QStackedWidget(central);
+
+    centralLayout->addWidget(m_groupTabs);
+    centralLayout->addWidget(m_groupStack, 1);
+
+    setCentralWidget(central);
+
+    // ========================================================================
+    // ✅ Создаём QMdiArea для каждой группы из config.groups.
+    // ========================================================================
+    m_groupAreas.clear();
+    m_groupCriticalCount.clear();
+
+    for (int i = 0; i < config.groups.size(); ++i) {
+        const DocGroup &g = config.groups[i];
+
+        QMdiArea *area = new QMdiArea(this);
+        area->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        area->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        area->setOption(QMdiArea::DontMaximizeSubWindowOnActivation, true);
+
+        m_groupStack->addWidget(area);
+        m_groupAreas.append(area);
+        m_groupCriticalCount.append(0);
+
+        m_groupTabs->addTab(g.name);
+
+        // Пересчёт заголовка окна при активации подокна в любой группе.
+        connect(area, &QMdiArea::subWindowActivated,
+                this, &MainWindow::updateWindowTitle);
+    }
+
+    // скрываем вкладки, если группа ровно одна
+    updateGroupTabsVisibility();
+
+    // Переключение вкладок
+    connect(m_groupTabs, &QTabBar::currentChanged,
+            this, [this](int index) {
+        if (index >= 0 && index < m_groupStack->count()) {
+            m_groupStack->setCurrentIndex(index);
+            updateMenus();
+            updateWindowTitle();
+
+            // Пересчитываем раскладку активной группы — на случай,
+            // если размеры QMdiArea изменились.
+            applyGridLayout(index);
+        }
+    });
+
+    // ✅ Таймер мигания аварийных вкладок
+    m_tabBlinkTimer = new QTimer(this);
+    m_tabBlinkTimer->setInterval(500);
+    connect(m_tabBlinkTimer, &QTimer::timeout,
+            this, &MainWindow::onTabBlinkTimeout);
+    m_tabBlinkTimer->start();
+
+    // ✅ Если групп нет (битый конфиг) — создаём дефолтную.
+    if (config.groups.isEmpty()) {
+        DocGroup defaultGroup;
+        defaultGroup.name = "Группа 1";
+        defaultGroup.columns = 2;
+        config.groups.append(defaultGroup);
+    }
+
     updateWindowTitle();
     setWindowTitle(mode == AppMode::Server ? "rmo [SERVER]" : "rmo [CLIENT]");
 
@@ -78,6 +147,14 @@ MainWindow::MainWindow(AppMode mode, const QJsonObject &clientConfig, QWidget *p
         authComboBox->addItems(users);
         authComboBox->setCurrentIndex(-1);
         authComboBox->blockSignals(false);
+        // Смену принял — тот же список.
+        if (shiftComboBox) {
+            shiftComboBox->blockSignals(true);
+            shiftComboBox->clear();
+            shiftComboBox->addItems(users);
+            shiftComboBox->setCurrentIndex(-1);
+            shiftComboBox->blockSignals(false);
+        }
         qDebug() << "[Auth] Загружено пользователей из БД:" << users.size();
     } else {
         qDebug() << "[DB] База данных недоступна, запускаем мастер инициализации...";
@@ -102,12 +179,27 @@ MainWindow::MainWindow(AppMode mode, const QJsonObject &clientConfig, QWidget *p
                 authComboBox->addItems(users);
                 authComboBox->setCurrentIndex(-1);
                 authComboBox->blockSignals(false);
+                // Смену принял — тот же список.
+                if (shiftComboBox) {
+                    shiftComboBox->blockSignals(true);
+                    shiftComboBox->clear();
+                    shiftComboBox->addItems(users);
+                    shiftComboBox->setCurrentIndex(-1);
+                    shiftComboBox->blockSignals(false);
+                }
                 qDebug() << "[Auth] Загружено пользователей из БД:" << users.size();
             } else {
                 authComboBox->blockSignals(true);
                 authComboBox->clear();
                 authComboBox->setCurrentIndex(-1);
                 authComboBox->blockSignals(false);
+                // Смену принял — тот же список.
+                if (shiftComboBox) {
+                    shiftComboBox->blockSignals(true);
+                    shiftComboBox->clear();
+                    shiftComboBox->setCurrentIndex(-1);
+                    shiftComboBox->blockSignals(false);
+                }
                 QMessageBox::critical(this, "Критическая ошибка",
                     "База данных была создана, но не удалось подключиться.\n"
                     "Проверьте настройки в меню 'Конфигурация' → 'Конфигурация базы данных'.\n"
@@ -118,6 +210,13 @@ MainWindow::MainWindow(AppMode mode, const QJsonObject &clientConfig, QWidget *p
             authComboBox->clear();
             authComboBox->setCurrentIndex(-1);
             authComboBox->blockSignals(false);
+            // Смену принял — тот же список.
+            if (shiftComboBox) {
+                shiftComboBox->blockSignals(true);
+                shiftComboBox->clear();
+                shiftComboBox->setCurrentIndex(-1);
+                shiftComboBox->blockSignals(false);
+            }
             QMessageBox::warning(this, "Ошибка БД",
                 "Не удалось подключиться к базе данных PostgreSQL.\n"
                 "Список пользователей не загружен.\n"
@@ -142,15 +241,30 @@ MainWindow::MainWindow(AppMode mode, const QJsonObject &clientConfig, QWidget *p
         m_net->startServer(serverPort);
         qDebug() << "[Server] Запущен на порту" << serverPort;
         loadConfig();
-        for (const QString &path : config.docPaths) {
-            if (QFileInfo::exists(path)) {
-                createDocumentFromFile(path, DocType::Antenna, false);
-            } else {
-                removeDocumentPath(path);
+
+        // Сначала — собрать «мёртвые» пути, потом удалить.
+        QStringList missingPaths;
+        for (const DocGroup &g : config.groups) {
+            for (const QString &path : g.docPaths) {
+                if (!QFileInfo::exists(path)) {
+                    missingPaths.append(path);
+                }
             }
         }
+        for (const QString &p : missingPaths) {
+            removeDocumentPath(p);
+        }
+
+        // Открываем существующие — каждый в своей группе.
+        for (int gi = 0; gi < config.groups.size(); ++gi) {
+            const QStringList paths = config.groups[gi].docPaths;  // копия!
+            for (const QString &path : paths) {
+                createDocumentFromFile(path, DocType::Antenna, gi, false);
+            }
+        }
+
         showMaximized();
-        QTimer::singleShot(100, this, &MainWindow::applyGridLayout);
+        QTimer::singleShot(100, this, &MainWindow::applyGridLayoutAll);
     } else {
         QString ip = clientConfig.value("server_ip").toString("127.0.0.1");
         quint16 port = clientConfig.value("server_port").toInt(5000);
@@ -170,9 +284,11 @@ MainWindow::MainWindow(AppMode mode, const QJsonObject &clientConfig, QWidget *p
                     if (typeStr == "transmitter") t = DocType::Transmitter;
                     else if (typeStr == "modulator") t = DocType::Modulator;
                     else if (typeStr == "energo") t = DocType::Energo;
+
+                    // ✅ Пока — все документы в первую группу.
                     openDocumentFromConfig(d["path"].toString(), t, d["port"].toInt(0));
                 }
-                applyGridLayout();
+                applyGridLayoutAll();
                 showMaximized();
             }
         });
@@ -186,7 +302,7 @@ MainWindow::~MainWindow()
     qDebug() << "[MainWindow] Деструктор НАЧАЛО";
 
     // ✅ КРИТИЧЕСКИ ВАЖНО: Отключаем все сигналы destroyed ПЕРЕД уничтожением mdiArea
-    for (QMdiSubWindow *sw : mdiArea->subWindowList()) {
+    for (QMdiSubWindow *sw : activeArea()->subWindowList()) {
         disconnect(sw, &QMdiSubWindow::destroyed, nullptr, nullptr);
     }
 
@@ -278,6 +394,33 @@ static QIcon createEquipmentIcon(const QString &type)
         p.drawPolygon(arrow);
         p.fillRect(15, 12, 6, 2, QColor("#C62828"));
     }
+    else if (type == "graph") {
+        // ✅ Иконка "график" — стилизованная осциллограмма
+        p.setBrush(QColor("#546E7A"));
+        p.setPen(Qt::NoPen);
+
+        // Рамка графика
+        p.drawRect(2, 4, 20, 16);
+
+        // Внутренняя область
+        p.setBrush(Qt::white);
+        p.drawRect(4, 6, 16, 12);
+
+        // Оси
+        QPen axisPen(QColor("#546E7A"), 1);
+        p.setPen(axisPen);
+        p.drawLine(4, 17, 20, 17);  // ось X
+        p.drawLine(4, 6, 4, 17);    // ось Y
+
+        // Кривая графика
+        QPen linePen(QColor("#005A9E"), 2);
+        p.setPen(linePen);
+        QPainterPath curve;
+        curve.moveTo(5, 15);
+        curve.cubicTo(8, 8, 12, 16, 15, 10);
+        curve.cubicTo(17, 7, 18, 12, 19, 8);
+        p.drawPath(curve);
+    }
 
     p.end();
     return QIcon(pixmap);
@@ -286,11 +429,18 @@ static QIcon createEquipmentIcon(const QString &type)
 QString MainWindow::getAppDir() const { return QCoreApplication::applicationDirPath(); }
 QString MainWindow::getConfigPath() const { return getAppDir() + "/config_monitor"; }
 
-void MainWindow::addDocumentPath(const QString &path)
+void MainWindow::addDocumentPath(const QString &path, int groupId)
 {
     QString clean = QDir::cleanPath(QDir::toNativeSeparators(path));
-    if (!clean.isEmpty() && !config.docPaths.contains(clean)) {
-        config.docPaths << clean;
+    if (clean.isEmpty()) return;
+
+    if (groupId < 0 || groupId >= config.groups.size()) {
+        groupId = 0;   // дефолт: первая группа
+    }
+
+    DocGroup &g = config.groups[groupId];
+    if (!g.docPaths.contains(clean)) {
+        g.docPaths.append(clean);
         saveConfig();
     }
 }
@@ -298,25 +448,37 @@ void MainWindow::addDocumentPath(const QString &path)
 void MainWindow::removeDocumentPath(const QString &path)
 {
     QString clean = QDir::cleanPath(QDir::toNativeSeparators(path));
-    if (config.docPaths.removeAll(clean) > 0) {
+    if (clean.isEmpty()) return;
+
+    bool changed = false;
+    for (DocGroup &g : config.groups) {
+        if (g.docPaths.removeAll(clean) > 0) {
+            changed = true;
+        }
+    }
+    if (changed) {
         saveConfig();
     }
 }
 
 BaseDocWidget* MainWindow::findWidgetByPath(const QString &path) const
 {
-    if (!mdiArea) return nullptr;
-
-    for (QMdiSubWindow *sw : mdiArea->subWindowList()) {
-        auto *w = qobject_cast<BaseDocWidget*>(sw->widget());
-        if (w && w->filePath() == path) return w;
+    for (QMdiArea *area : m_groupAreas) {
+        if (!area) continue;
+        for (QMdiSubWindow *sw : area->subWindowList()) {
+            auto *w = qobject_cast<BaseDocWidget*>(sw->widget());
+            if (w && w->filePath() == path) return w;
+        }
     }
     return nullptr;
 }
 
 QString MainWindow::getActiveDocumentPath()
 {
-    QMdiSubWindow *activeSubWindow = mdiArea ? mdiArea->activeSubWindow() : nullptr;
+    QMdiArea *area = activeArea();
+    if (!area) return QString();
+
+    QMdiSubWindow *activeSubWindow = area->activeSubWindow();
     if (!activeSubWindow) return QString();
 
     QWidget *widget = activeSubWindow->widget();
@@ -328,48 +490,151 @@ QString MainWindow::getActiveDocumentPath()
     return QString();
 }
 
+BaseDocWidget* MainWindow::getCurrentDocument() const
+{
+    QMdiArea *area = activeArea();
+    if (!area) return nullptr;
+
+    QMdiSubWindow *activeSubWindow = area->activeSubWindow();
+    if (!activeSubWindow) return nullptr;
+
+    QWidget *widget = activeSubWindow->widget();
+    if (!widget) return nullptr;
+
+    return qobject_cast<BaseDocWidget*>(widget);
+}
+
 void MainWindow::loadConfig()
 {
     QFile f(getConfigPath());
-    if (!f.open(QIODevice::ReadOnly)) return;
+    if (!f.open(QIODevice::ReadOnly)) {
+        // Файла нет — создаём дефолтную конфигурацию: одна группа.
+        config.groups.clear();
+        DocGroup defaultGroup;
+        defaultGroup.name = "Группа 1";
+        defaultGroup.columns = 2;
+        config.groups.append(defaultGroup);
+        config.columns = 2;
+        return;
+    }
 
     QJsonParseError err;
     QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
     f.close();
 
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning() << "[Config] Ошибка парсинга config_monitor:" << err.errorString();
+        config.groups.clear();
+        DocGroup defaultGroup;
+        defaultGroup.name = "Группа 1";
+        defaultGroup.columns = 2;
+        config.groups.append(defaultGroup);
+        config.columns = 2;
+        return;
+    }
 
     QJsonObject obj = doc.object();
-    config.columns = obj.value("columns").toInt(2);
-    config.docPaths.clear();
 
-    QJsonArray arr = obj.value("documents").toArray();
-    for (const QJsonValue &v : arr) {
-        config.docPaths << QDir::cleanPath(QDir::toNativeSeparators(v.toString()));
+    // ----------------------------------------------------------------
+    // ✅ Новый формат: { "columns": N, "groups": [ {...}, {...} ] }
+    // ----------------------------------------------------------------
+    if (obj.contains("groups")) {
+        config.columns = obj.value("columns").toInt(2);
+        config.groups.clear();
+
+        QJsonArray groupsArr = obj.value("groups").toArray();
+        for (const QJsonValue &gVal : groupsArr) {
+            QJsonObject gObj = gVal.toObject();
+
+            DocGroup g;
+            g.name    = gObj.value("name").toString("Группа");
+            g.columns = gObj.value("columns").toInt(config.columns);
+
+            QJsonArray docs = gObj.value("documents").toArray();
+            for (const QJsonValue &dVal : docs) {
+                QString path = QDir::cleanPath(
+                    QDir::toNativeSeparators(dVal.toString()));
+                if (!path.isEmpty()) {
+                    g.docPaths.append(path);
+                }
+            }
+            config.groups.append(g);
+        }
+
+        // Защита: если групп 0 (битый файл) — создаём одну дефолтную.
+        if (config.groups.isEmpty()) {
+            DocGroup defaultGroup;
+            defaultGroup.name = "Группа 1";
+            defaultGroup.columns = 2;
+            config.groups.append(defaultGroup);
+        }
+
+        qDebug() << "[Config] Загружено групп:" << config.groups.size();
+        return;
     }
+
+    // ----------------------------------------------------------------
+    // ✅ Старый формат: { "columns": N, "documents": [...] }
+    //    Миграция: заворачиваем в одну группу "По умолчанию".
+    // ----------------------------------------------------------------
+    if (obj.contains("documents")) {
+        config.columns = obj.value("columns").toInt(2);
+        config.groups.clear();
+
+        DocGroup g;
+        g.name = "По умолчанию";
+        g.columns = config.columns;
+
+        QJsonArray arr = obj.value("documents").toArray();
+        for (const QJsonValue &v : arr) {
+            QString path = QDir::cleanPath(
+                QDir::toNativeSeparators(v.toString()));
+            if (!path.isEmpty()) {
+                g.docPaths.append(path);
+            }
+        }
+        config.groups.append(g);
+
+        qDebug() << "[Config] Миграция из старого формата: одна группа";
+        return;
+    }
+
+    // ----------------------------------------------------------------
+    // Совсем пустой/неизвестный конфиг — дефолт.
+    // ----------------------------------------------------------------
+    config.columns = 2;
+    config.groups.clear();
+    DocGroup defaultGroup;
+    defaultGroup.name = "Группа 1";
+    defaultGroup.columns = 2;
+    config.groups.append(defaultGroup);
 }
 
 void MainWindow::broadcastConfigToClients()
 {
+    // ⚠️ ВРЕМЕННАЯ РЕАЛИЗАЦИЯ: старый формат (плоский список).
+    //    Сетевая синхронизация групп — отдельный этап.
     QJsonObject msg;
     msg["type"] = "config";
     msg["columns"] = config.columns;
 
     QJsonArray docs;
-    for (const QString &path : config.docPaths) {
-        QJsonObject d;
-        d["path"] = path;
-        d["port"] = 0;
+    for (const DocGroup &g : config.groups) {
+        for (const QString &path : g.docPaths) {
+            QJsonObject d;
+            d["path"] = path;
+            d["port"] = 0;
 
-        BaseDocWidget *w = findWidgetByPath(path);
-        if (w) {
-            if (w->docType() == DocType::Antenna) d["type"] = "antenna";
-            else if (w->docType() == DocType::Transmitter) d["type"] = "transmitter";
-            else if (w->docType() == DocType::Modulator) d["type"] = "modulator";
-            else if (w->docType() == DocType::Energo) d["type"] = "energo";
-            d["port"] = w->getDocPort();
+            BaseDocWidget *w = findWidgetByPath(path);
+            if (w) {
+                if (w->docType() == DocType::Antenna) d["type"] = "antenna";
+                else if (w->docType() == DocType::Transmitter) d["type"] = "transmitter";
+                else if (w->docType() == DocType::Modulator) d["type"] = "modulator";
+                else if (w->docType() == DocType::Energo) d["type"] = "energo";
+                d["port"] = w->getDocPort();
+            }
+            docs.append(d);
         }
-        docs.append(d);
     }
     msg["documents"] = docs;
 
@@ -381,11 +646,24 @@ void MainWindow::saveConfig()
     QJsonObject obj;
     obj["columns"] = config.columns;
 
-    QJsonArray arr;
-    for (const QString &p : config.docPaths) {
-        arr << QDir::cleanPath(QDir::toNativeSeparators(p));
+    // ----------------------------------------------------------------
+    // ✅ Новый формат: groups[]
+    // ----------------------------------------------------------------
+    QJsonArray groupsArr;
+    for (const DocGroup &g : config.groups) {
+        QJsonObject gObj;
+        gObj["name"] = g.name;
+        gObj["columns"] = g.columns;
+
+        QJsonArray docsArr;
+        for (const QString &p : g.docPaths) {
+            docsArr.append(QDir::cleanPath(QDir::toNativeSeparators(p)));
+        }
+        gObj["documents"] = docsArr;
+
+        groupsArr.append(gObj);
     }
-    obj["documents"] = arr;
+    obj["groups"] = groupsArr;
 
     QFile f(getConfigPath());
     if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -420,14 +698,11 @@ void MainWindow::updateWindowTitle()
     QString modeStr = (m_mode == AppMode::Server) ? "SERVER" : "CLIENT";
     QString docName;
 
-    QMdiSubWindow *activeSubWindow = mdiArea ? mdiArea->activeSubWindow() : nullptr;
-    if (activeSubWindow) {
-        QWidget *widget = activeSubWindow->widget();
-        if (BaseDocWidget *docWidget = qobject_cast<BaseDocWidget*>(widget)) {
-            QString filePath = docWidget->filePath();
-            if (!filePath.isEmpty()) {
-                docName = QFileInfo(filePath).completeBaseName();
-            }
+    BaseDocWidget *doc = getCurrentDocument();
+    if (doc) {
+        QString filePath = doc->filePath();
+        if (!filePath.isEmpty()) {
+            docName = QFileInfo(filePath).completeBaseName();
         }
     }
 
@@ -438,8 +713,12 @@ void MainWindow::updateWindowTitle()
     setWindowTitle(title);
 }
 
-BaseDocWidget* MainWindow::createDocumentFromFile(const QString &path, DocType type, bool addToConfig)
+BaseDocWidget* MainWindow::createDocumentFromFile(const QString &path,
+                                                  DocType type,
+                                                  int groupId,
+                                                  bool addToConfig)
 {
+    // Определяем тип по расширению, если путь задан.
     if (!path.isEmpty()) {
         QString ext = QFileInfo(path).suffix().toLower();
         if (ext == "ant") type = DocType::Antenna;
@@ -448,6 +727,16 @@ BaseDocWidget* MainWindow::createDocumentFromFile(const QString &path, DocType t
         else if (ext == "enr") type = DocType::Energo;
     }
 
+    // Группа по умолчанию — активная.
+    if (groupId < 0) {
+        groupId = m_groupTabs ? m_groupTabs->currentIndex() : 0;
+    }
+    if (groupId < 0 || groupId >= m_groupAreas.size()) {
+        groupId = 0;
+    }
+    QMdiArea *area = m_groupAreas[groupId];
+    if (!area) return nullptr;
+
     BaseDocWidget *doc = nullptr;
     switch (type) {
         case DocType::Antenna:     doc = new AntennaWidget(this); break;
@@ -455,21 +744,25 @@ BaseDocWidget* MainWindow::createDocumentFromFile(const QString &path, DocType t
         case DocType::Modulator:   doc = new ModulatorWidget(this); break;
         case DocType::Energo:      doc = new EnergoWidget(this); break;
     }
-
     if (!doc) return nullptr;
 
-    QString finalTitle = path.isEmpty() ? "Новый документ" : QFileInfo(path).completeBaseName();
+    QString finalTitle = path.isEmpty() ? "Новый документ"
+                                        : QFileInfo(path).completeBaseName();
     CustomTitleBar *titleBar = new CustomTitleBar(finalTitle, doc);
     doc->setTitleBarWidget(titleBar);
 
     QSize targetSize = doc->documentFixedSize();
     titleBar->setMinimumWidth(targetSize.width() - 12);
 
+    // ✅ Подключаем кнопку звука в заголовке к проигрывателю аварий документа.
+    connect(titleBar, &CustomTitleBar::soundStateChanged,
+            doc, &BaseDocWidget::setAlarmSoundEnabled);
+
     if (!path.isEmpty()) {
         doc->setFilePath(path);
         initializeDocumentFile(path, type);
         doc->loadFromFilePreserveSections(path);
-        addDocumentPath(path);
+        if (addToConfig) addDocumentPath(path, groupId);
     } else if (addToConfig) {
         QString prefix, suffix;
         switch (type) {
@@ -485,18 +778,13 @@ BaseDocWidget* MainWindow::createDocumentFromFile(const QString &path, DocType t
         doc->setFilePath(fullPath);
         initializeDocumentFile(fullPath, type);
         doc->loadFromFilePreserveSections(fullPath);
-        addDocumentPath(fullPath);
+        addDocumentPath(fullPath, groupId);
     }
 
-    FixedSubWindow *sub = new FixedSubWindow(doc, mdiArea);
+    FixedSubWindow *sub = new FixedSubWindow(doc, area);
+    sub->setGroupId(groupId);
     sub->setAttribute(Qt::WA_DeleteOnClose);
     sub->setFixedSize(targetSize);
-
-    QGraphicsDropShadowEffect *shadow = new QGraphicsDropShadowEffect(sub);
-    shadow->setBlurRadius(15);
-    shadow->setColor(QColor(0, 0, 0, 80));
-    shadow->setOffset(0, 4);
-    sub->setGraphicsEffect(shadow);
 
     if (QLayout *subLayout = sub->layout()) {
         subLayout->setContentsMargins(0, 0, 0, 0);
@@ -515,27 +803,28 @@ BaseDocWidget* MainWindow::createDocumentFromFile(const QString &path, DocType t
     sub->show();
 
     QString serverIp = "127.0.0.1";
-    quint16 docPort = 6000 + (mdiArea ? mdiArea->subWindowList().size() : 0);
+    quint16 docPort = 6000 + (sub ? area->subWindowList().size() : 0);
     doc->initDocumentNetwork(m_mode, docPort, serverIp, 0);
 
     connect(doc, &BaseDocWidget::alarmsUpdated,
             this, &MainWindow::updateAlarmPanelForDoc);
 
+    // Безопасный захват docPath при удалении подокна.
     QString docPath = QDir::cleanPath(QDir::toNativeSeparators(doc->filePath()));
-
-    // ✅ ИСПРАВЛЕНО: Используем QPointer для безопасного захвата this
     QPointer<MainWindow> safeThis(this);
     connect(sub, &QMdiSubWindow::destroyed, this, [safeThis, docPath]() {
-        if (!safeThis) {
-            qDebug() << "[MainWindow] MainWindow уже уничтожен, пропускаем обработку destroyed";
-            return;
-        }
-
+        if (!safeThis) return;
         QTimer::singleShot(0, safeThis.data(), [safeThis, docPath]() {
             if (!safeThis) return;
-
+            // ✅ Убираем документ из счётчиков аварий.
+            safeThis->m_docCriticalCount.remove(docPath);
+            const int groupId = safeThis->findGroupIdByDocPath(docPath);
+            if (groupId >= 0) {
+                safeThis->recalcGroupCriticalCount(groupId);
+                safeThis->updateTabAppearance(groupId);
+            }
             safeThis->removeDocumentPath(docPath);
-            safeThis->applyGridLayout();
+            safeThis->applyGridLayoutAll();
             if (safeThis->m_mode == AppMode::Server) {
                 safeThis->broadcastConfigToClients();
             }
@@ -546,6 +835,9 @@ BaseDocWidget* MainWindow::createDocumentFromFile(const QString &path, DocType t
     if (m_mode == AppMode::Server) {
         broadcastConfigToClients();
     }
+
+    // Раскладка группы, в которую добавлен документ.
+    QTimer::singleShot(20, this, [this, groupId]() { applyGridLayout(groupId); });
 
     return doc;
 }
@@ -571,10 +863,22 @@ void MainWindow::initializeDocumentFile(const QString &filePath, DocType type)
             QJsonObject settings;
             settings["polling_interval"] = 1000;
             settings["db_write_interval"] = 5000;
+            settings["alarm_write_duration_min"] = 10;
             settings["in_work"] = false;
             obj["settings"] = settings;
             needSave = true;
             qDebug() << "[DocInit] Добавлена секция settings в:" << filePath;
+        } else {
+            // ✅ Добавляем alarm_write_duration_min, если его нет
+            //    (для документов, созданных до этого патча).
+            QJsonObject settings = obj.value("settings").toObject();
+            if (!settings.contains("alarm_write_duration_min")) {
+                settings["alarm_write_duration_min"] = 10;
+                obj["settings"] = settings;
+                needSave = true;
+                qDebug() << "[DocInit] Добавлено поле alarm_write_duration_min в:"
+                         << filePath;
+            }
         }
 
         if (!obj.contains("connections")) {
@@ -634,6 +938,7 @@ void MainWindow::initializeDocumentFile(const QString &filePath, DocType type)
     QJsonObject settings;
     settings["polling_interval"] = 1000;
     settings["db_write_interval"] = 5000;
+    settings["alarm_write_duration_min"] = 10;
     settings["in_work"] = false;
     obj["settings"] = settings;
 
@@ -709,7 +1014,7 @@ void MainWindow::openDocumentFromConfig(const QString &path, DocType type, quint
     doc->setFilePath(path);
     doc->initDocumentNetwork(AppMode::Client, 0, "127.0.0.1", docPort);
 
-    FixedSubWindow *sub = new FixedSubWindow(doc, mdiArea);
+    FixedSubWindow *sub = new FixedSubWindow(doc, activeArea());
     sub->setAttribute(Qt::WA_DeleteOnClose);
     sub->setFixedSize(doc->documentFixedSize());
     sub->show();
@@ -775,6 +1080,13 @@ void MainWindow::setupActions()
     equipmentSettingsAct->setIcon(createEquipmentIcon("config"));
     connect(equipmentSettingsAct, &QAction::triggered, this, &MainWindow::showEquipmentSettings);
 
+    // ✅ НОВЫЙ Action: Просмотр графика
+    viewDataAct = new QAction("Просмотр графика", this);
+    viewDataAct->setIcon(createEquipmentIcon("graph"));  // см. ниже — нужна иконка
+    viewDataAct->setToolTip("Открыть отчёт с графиком для активного документа");
+    viewDataAct->setShortcut(QKeySequence("Ctrl+G"));
+    connect(viewDataAct, &QAction::triggered, this, &MainWindow::onViewDataAction);
+
     saveAct = new QAction("&Сохранить", this);
     saveAct->setIcon(createEquipmentIcon("save"));
     saveAct->setShortcut(QKeySequence::Save);
@@ -817,7 +1129,37 @@ void MainWindow::setupActions()
     mainToolBar->addSeparator();
     mainToolBar->addAction(equipmentSettingsAct);
     mainToolBar->addSeparator();
+    // ✅ НОВОЕ: Отчёт с графиком
+    mainToolBar->addAction(viewDataAct);
+    mainToolBar->addSeparator();
 
+    // ============================================================================
+    // Смену принял
+    // ============================================================================
+
+    QLabel *shiftLabel = new QLabel("Смену принял:", this);
+    shiftLabel->setStyleSheet(
+        "font-weight: bold; color: #333333; margin-right: 4px; margin-left: 8px;");
+    mainToolBar->addWidget(shiftLabel);
+
+    shiftComboBox = new QComboBox(this);
+    shiftComboBox->setMinimumWidth(150);
+    shiftComboBox->setCurrentIndex(-1);
+    shiftComboBox->setStyleSheet(
+        "QComboBox { padding: 4px; border: 1px solid #B0B0B0; "
+        "             border-radius: 3px; background-color: white; }"
+        "QComboBox:hover { border: 1px solid #005A9E; }"
+    );
+
+    connect(shiftComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onShiftComboBoxChanged);
+
+    mainToolBar->addWidget(shiftComboBox);
+    mainToolBar->addSeparator();
+
+    // ============================================================================
+    // блок авторизации
+    // ============================================================================
     authLabel = new QLabel("Авторизация:", this);
     authLabel->setStyleSheet("font-weight: bold; color: #333333; margin-right: 4px; margin-left: 8px;");
     mainToolBar->addWidget(authLabel);
@@ -835,50 +1177,72 @@ void MainWindow::setupActions()
         "QComboBox:hover { border: 1px solid #005A9E; }"
     );
 
-    connect(authComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+    connect(authComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
         if (index < 0) {
+            // ----------------------------------------------------------------
+            // Авторизация снята (logout или таймаут).
+            // ----------------------------------------------------------------
+            if (!m_authUser.isEmpty()) {
+                // Логируем «выход» под именем уходившего.
+                DatabaseManager::instance().setCurrentUserName(m_authUser);
+                DatabaseManager::instance().logUserAction(
+                    "Пользователи", QString(),
+                    QString("Выход из системы: %1").arg(m_authUser));
+            }
+
+            m_authUser.clear();
+
+            // ✅ Имя и роль — теперь по смене (или Аноним).
+            DatabaseManager::instance().setCurrentUserName(effectiveUserName());
+            DatabaseManager::instance().setCurrentUserRole(effectiveUserRole());
+
             authTimer->stop();
             timeLabel->setText("00:00");
             timeLabel->setStyleSheet(
                 "font-family: 'Consolas', 'Courier New', monospace; "
-                "font-weight: bold; "
-                "color: #999999; "
-                "font-size: 15px; "
-                "margin: 0px 8px;"
-            );
+                "font-weight: bold; color: #999999; font-size: 15px; "
+                "margin: 0px 8px;");
+
+            applyUserPermissions();
             return;
         }
 
-        QString username = authComboBox->currentText();
+        // ----------------------------------------------------------------
+        // Авторизация с паролем.
+        // ----------------------------------------------------------------
+        const QString username = authComboBox->currentText();
         AuthDialog authDlg(username, this);
-        int result = authDlg.exec();
+        if (authDlg.exec() == QDialog::Accepted && authDlg.isAuthenticated()) {
+            m_authUser = username;
 
-        if (result == QDialog::Accepted && authDlg.isAuthenticated()) {
-            QString role = DatabaseManager::instance().getUserRole(username);
+            const QString role = DatabaseManager::instance().getUserRole(username);
             DatabaseManager::instance().setCurrentUserRole(role);
-            applyUserPermissions();
+            DatabaseManager::instance().setCurrentUserName(username);
+
+            DatabaseManager::instance().logUserAction(
+                "Пользователи", QString(),
+                QString("Вход в систему: %1").arg(username));
+
             authTimeSeconds = 1800;
             timeLabel->setText("30:00");
             timeLabel->setStyleSheet(
                 "font-family: 'Consolas', 'Courier New', monospace; "
-                "font-weight: bold; "
-                "color: #005A9E; "
-                "font-size: 15px; "
-                "margin: 0px 8px;"
-            );
+                "font-weight: bold; color: #005A9E; font-size: 15px; "
+                "margin: 0px 8px;");
             authTimer->start(1000);
+
+            applyUserPermissions();
         } else {
             authComboBox->blockSignals(true);
             authComboBox->setCurrentIndex(-1);
             authComboBox->blockSignals(false);
-            timeLabel->setText("00:00");
-            timeLabel->setStyleSheet(
-                "font-family: 'Consolas', 'Courier New', monospace; "
-                "font-weight: bold; "
-                "color: #999999; "
-                "font-size: 15px; "
-                "margin: 0px 8px;"
-            );
+
+            // Возвращаемся к правам смены (если была) или к пустому состоянию.
+            DatabaseManager::instance().setCurrentUserName(effectiveUserName());
+            DatabaseManager::instance().setCurrentUserRole(effectiveUserRole());
+
+            applyUserPermissions();
         }
     });
 
@@ -930,8 +1294,29 @@ void MainWindow::setupActions()
     connect(userConfigAct, &QAction::triggered, this, &MainWindow::showUserManagement);
     securityMenu->addAction(userConfigAct);
 
+    securityMenu->addSeparator();
+
+    // ✅ Журнал действий пользователей.
+    QAction *userActionLogAct = new QAction("Журнал действий пользователей...", this);
+    userActionLogAct->setIcon(createEquipmentIcon("graph"));  // опционально
+    connect(userActionLogAct, &QAction::triggered,
+            this, &MainWindow::showUserActionLog);
+    securityMenu->addAction(userActionLogAct);
+
     QMenu *settingsMenu = menuBar()->addMenu("&Настройка");
     settingsMenu->addAction(equipmentSettingsAct);
+
+    // ✅ НОВОЕ МЕНЮ: Отчёт
+    QMenu *reportMenu = menuBar()->addMenu("&Отчёт");
+    reportMenu->addAction(viewDataAct);
+
+    // ✅ Меню «Сервис»: редактор конфигов драйверов
+    QMenu *serviceMenu = menuBar()->addMenu("&Сервис");
+    QAction *driverConfigAct = new QAction("Конфиги драйверов...", this);
+    driverConfigAct->setIcon(createEquipmentIcon("config"));
+    connect(driverConfigAct, &QAction::triggered,
+            this, &MainWindow::showDriverConfigEditor);
+    serviceMenu->addAction(driverConfigAct);
 
     QMenu *configMenu = menuBar()->addMenu("&Конфигурация");
 
@@ -961,10 +1346,10 @@ void MainWindow::setupActions()
     menuBar()->addMenu("&Помощь")->addAction("О программе", this, &MainWindow::aboutApp);
 }
 
-void MainWindow::newAntenna()     { createDocumentFromFile(QString(), DocType::Antenna); QTimer::singleShot(20, this, &MainWindow::applyGridLayout); }
-void MainWindow::newTransmitter() { createDocumentFromFile(QString(), DocType::Transmitter); QTimer::singleShot(20, this, &MainWindow::applyGridLayout); }
-void MainWindow::newModulator()   { createDocumentFromFile(QString(), DocType::Modulator); QTimer::singleShot(20, this, &MainWindow::applyGridLayout); }
-void MainWindow::newEnergo()      { createDocumentFromFile(QString(), DocType::Energo); QTimer::singleShot(20, this, &MainWindow::applyGridLayout); }
+void MainWindow::newAntenna()     { createDocumentFromFile(QString(), DocType::Antenna); QTimer::singleShot(20, this, &MainWindow::applyGridLayoutAll); }
+void MainWindow::newTransmitter() { createDocumentFromFile(QString(), DocType::Transmitter); QTimer::singleShot(20, this, &MainWindow::applyGridLayoutAll); }
+void MainWindow::newModulator()   { createDocumentFromFile(QString(), DocType::Modulator); QTimer::singleShot(20, this, &MainWindow::applyGridLayoutAll); }
+void MainWindow::newEnergo()      { createDocumentFromFile(QString(), DocType::Energo); QTimer::singleShot(20, this, &MainWindow::applyGridLayoutAll); }
 
 void MainWindow::openDocument()
 {
@@ -972,14 +1357,15 @@ void MainWindow::openDocument()
     QString filePath = QFileDialog::getOpenFileName(this, "Открыть документ", getAppDir(), filter);
 
     if (!filePath.isEmpty()) {
-        createDocumentFromFile(filePath);
-        QTimer::singleShot(20, this, &MainWindow::applyGridLayout);
+        int gid = m_groupTabs ? m_groupTabs->currentIndex() : 0;
+        createDocumentFromFile(filePath, DocType::Antenna, gid);
+        QTimer::singleShot(20, this, &MainWindow::applyGridLayoutAll);
     }
 }
 
 void MainWindow::saveDocument()
 {
-    QMdiSubWindow *activeSubWindow = mdiArea ? mdiArea->activeSubWindow() : nullptr;
+    QMdiSubWindow *activeSubWindow = activeArea() ? activeArea()->activeSubWindow() : nullptr;
     if (!activeSubWindow) return;
 
     BaseDocWidget *doc = qobject_cast<BaseDocWidget*>(activeSubWindow->widget());
@@ -1000,7 +1386,7 @@ void MainWindow::saveDocument()
 
 void MainWindow::saveAsDocument()
 {
-    QMdiSubWindow *sub = mdiArea ? mdiArea->activeSubWindow() : nullptr;
+    QMdiSubWindow *sub = activeArea() ? activeArea()->activeSubWindow() : nullptr;
     if (!sub) return;
 
     BaseDocWidget *doc = qobject_cast<BaseDocWidget*>(sub->widget());
@@ -1031,38 +1417,45 @@ void MainWindow::saveAsDocument()
 
 void MainWindow::closeDocument()
 {
-    QMdiSubWindow *sub = mdiArea ? mdiArea->activeSubWindow() : nullptr;
+    QMdiSubWindow *sub = activeArea() ? activeArea()->activeSubWindow() : nullptr;
     if (sub) sub->close();
+}
+
+QStringList MainWindow::getDocPaths() const
+{
+    QStringList result;
+    for (const DocGroup &g : config.groups) {
+        result.append(g.docPaths);
+    }
+    return result;
 }
 
 void MainWindow::showScreenConfig()
 {
-    QString currentUser = authComboBox->currentText();
-    if (currentUser.isEmpty()) {
+    if (m_authUser.isEmpty()) {
         QMessageBox::warning(this, "Доступ запрещён",
             "Необходима авторизация для доступа к конфигурации экрана.");
         return;
     }
 
-    if (!DatabaseManager::instance().hasPermission(currentUser, "change_screen_config")) {
+    if (!DatabaseManager::instance().hasPermission(m_authUser, "change_screen_config")) {
         QMessageBox::warning(this, "Доступ запрещён",
             "Только администратор может изменять конфигурацию экрана.");
         return;
     }
 
-    ScreenConfigDialog dlg(config.columns, config.docPaths, this);
+    ScreenConfigDialog dlg(config.groups, this);
     if (dlg.exec() == QDialog::Accepted) {
-        config.columns = dlg.columns();
-        config.docPaths = dlg.docPaths();
-        saveConfig();
-        applyGridLayout();
-        if (m_mode == AppMode::Server) broadcastConfigToClients();
+        applyScreenConfig(dlg.groups());
     }
 }
 
 void MainWindow::updateMenus()
 {
-    bool hasDocs = !config.docPaths.isEmpty();
+    bool hasDocs = false;
+    for (const DocGroup &g : config.groups) {
+        if (!g.docPaths.isEmpty()) { hasDocs = true; break; }
+    }
     saveAct->setEnabled(hasDocs);
     saveAsAct->setEnabled(hasDocs);
     closeAct->setEnabled(hasDocs);
@@ -1078,63 +1471,89 @@ void MainWindow::updateWindowMenu()
     windowMenu->addAction("П&редыдущее", this, &MainWindow::previousWindow);
     windowMenu->addSeparator();
 
-    QList<QMdiSubWindow*> windows = mdiArea ? mdiArea->subWindowList() : QList<QMdiSubWindow*>();
+    QMdiArea *area = activeArea();
+    QList<QMdiSubWindow*> windows = area ? area->subWindowList() : QList<QMdiSubWindow*>();
+
     for (int i = 0; i < windows.size(); ++i) {
         auto *doc = qobject_cast<BaseDocWidget*>(windows[i]->widget());
-        QString text = doc ? QFileInfo(doc->filePath()).baseName() : QString("Документ %1").arg(i + 1);
+        QString text = doc ? QFileInfo(doc->filePath()).baseName()
+                           : QString("Документ %1").arg(i + 1);
         QAction *action = windowMenu->addAction(text);
         action->setCheckable(true);
-        action->setChecked(windows[i] == (mdiArea ? mdiArea->activeSubWindow() : nullptr));
+        action->setChecked(windows[i] == (area ? area->activeSubWindow() : nullptr));
         QMdiSubWindow *subWindow = windows[i];
-        connect(action, &QAction::triggered, this, [this, subWindow]() {
-            if (mdiArea) mdiArea->setActiveSubWindow(subWindow);
+        connect(action, &QAction::triggered, this, [area, subWindow]() {
+            if (area) area->setActiveSubWindow(subWindow);
         });
     }
 }
 
-void MainWindow::cascadeWindows() { if (mdiArea) mdiArea->cascadeSubWindows(); }
-void MainWindow::tileWindows()    { if (mdiArea) mdiArea->tileSubWindows(); }
-void MainWindow::nextWindow()     { if (mdiArea) mdiArea->activateNextSubWindow(); }
-void MainWindow::previousWindow() { if (mdiArea) mdiArea->activatePreviousSubWindow(); }
+void MainWindow::cascadeWindows() { if (QMdiArea *a = activeArea()) a->cascadeSubWindows(); }
+void MainWindow::tileWindows()    { if (QMdiArea *a = activeArea()) a->tileSubWindows(); }
+void MainWindow::nextWindow()     { if (QMdiArea *a = activeArea()) a->activateNextSubWindow(); }
+void MainWindow::previousWindow() { if (QMdiArea *a = activeArea()) a->activatePreviousSubWindow(); }
 
 void MainWindow::aboutApp()
 {
-    QMessageBox::about(this, "О программе", "rmo v1.0\n"
-        "Кроссплатформенное MDI-приложение\n"
-        "Astra Linux / Windows 10/11");
+    QDialog dlg(this);
+    dlg.setWindowTitle("О программе");
+    QVBoxLayout* layout = new QVBoxLayout(&dlg);
+
+    QLabel* lblPix = new QLabel(&dlg);
+    QString appDir = QCoreApplication::applicationDirPath();
+    QPixmap pixmap(appDir + "/images/logotip.bmp");
+    if (!pixmap.isNull())
+        lblPix->setPixmap(pixmap);
+
+    QLabel* lblText = new QLabel(&dlg);
+    lblText->setText("rmo v1.0\nКроссплатформенное MDI-приложение\nAstra Linux / Windows 10/11");
+
+    layout->addWidget(lblPix);
+    layout->addWidget(lblText);
+    dlg.exec();
 }
 
 void MainWindow::onSubWindowActivated(QMdiSubWindow *window)
 {
-    Q_UNUSED(window)
+    Q_UNUSED(window);
     updateMenus();
 }
 
 void MainWindow::onAuthTimerTimeout()
 {
-    if (authTimeSeconds > 0) {
-        authTimeSeconds--;
-    }
+    if (authTimeSeconds > 0) --authTimeSeconds;
 
     int mins = authTimeSeconds / 60;
     int secs = authTimeSeconds % 60;
     timeLabel->setText(QString("%1:%2")
-        .arg(mins, 2, 10, QChar('0'))
-        .arg(secs, 2, 10, QChar('0'))
-    );
+                       .arg(mins, 2, 10, QChar('0'))
+                       .arg(secs, 2, 10, QChar('0')));
 
     if (authTimeSeconds == 0) {
         authTimer->stop();
         timeLabel->setStyleSheet(
             "font-family: 'Consolas', 'Courier New', monospace; "
-            "font-weight: bold; "
-            "color: #C62828; "
-            "font-size: 15px; "
-            "margin: 0px 8px;"
-        );
+            "font-weight: bold; color: #C62828; font-size: 15px; "
+            "margin: 0px 8px;");
+
+        // ✅ Логируем автовыход, если был авторизован.
+        if (!m_authUser.isEmpty()) {
+            DatabaseManager::instance().setCurrentUserName(m_authUser);
+            DatabaseManager::instance().logUserAction(
+                "Пользователи", QString(),
+                QString("Автоматический выход по таймауту: %1").arg(m_authUser));
+        }
+
+        m_authUser.clear();
+
         authComboBox->blockSignals(true);
         authComboBox->setCurrentIndex(-1);
         authComboBox->blockSignals(false);
+
+        // ✅ Возвращаемся к правам смены (или Аноним).
+        DatabaseManager::instance().setCurrentUserName(effectiveUserName());
+        DatabaseManager::instance().setCurrentUserRole(effectiveUserRole());
+
         applyUserPermissions();
     }
 }
@@ -1142,23 +1561,47 @@ void MainWindow::onAuthTimerTimeout()
 void MainWindow::onLogoutClicked()
 {
     authTimer->stop();
+
+    // ✅ Логируем выход под именем авторизованного.
+    if (!m_authUser.isEmpty()) {
+        DatabaseManager::instance().setCurrentUserName(m_authUser);
+        DatabaseManager::instance().logUserAction(
+            "Пользователи", QString(),
+            QString("Выход из системы (кнопка): %1").arg(m_authUser));
+    }
+
+    m_authUser.clear();
+
+    timeLabel->setText("00:00");
     timeLabel->setStyleSheet(
         "font-family: 'Consolas', 'Courier New', monospace; "
-        "font-weight: bold; "
-        "color: #005A9E; "
-        "font-size: 15px; "
-        "margin: 0px 8px;"
-    );
+        "font-weight: bold; color: #999999; font-size: 15px; "
+        "margin: 0px 8px;");
+
+    authComboBox->blockSignals(true);
     authComboBox->setCurrentIndex(-1);
+    authComboBox->blockSignals(false);
+
+    // ✅ Возвращаемся к правам смены (или Аноним).
+    DatabaseManager::instance().setCurrentUserName(effectiveUserName());
+    DatabaseManager::instance().setCurrentUserRole(effectiveUserRole());
+
     applyUserPermissions();
 }
 
 void MainWindow::applyUserPermissions()
 {
-    QString currentUser = authComboBox->currentText();
-    qDebug() << "[Permissions] Применяем права для пользователя:" << currentUser;
+    const QString authUser  = m_authUser;
+    const QString shiftUser = m_shiftUser;
 
-    if (currentUser.isEmpty()) {
+    qDebug() << "[Permissions] authUser:" << authUser
+             << "shiftUser:" << shiftUser;
+
+    // ========================================================================
+    // Никто не авторизован — всё запрещено.
+    // («Смена принял» даёт только имя в журнале, но не права.)
+    // ========================================================================
+    if (authUser.isEmpty()) {
         newAntAct->setEnabled(false);
         newTxAct->setEnabled(false);
         newModAct->setEnabled(false);
@@ -1178,58 +1621,56 @@ void MainWindow::applyUserPermissions()
         return;
     }
 
+    // ========================================================================
+    // Авторизованный пользователь — права из БД.
+    // ========================================================================
     auto &db = DatabaseManager::instance();
-    QString role = db.getUserRole(currentUser);
-    qDebug() << "[Permissions] Роль пользователя:" << role;
 
-    changePasswordAct->setEnabled(true);
-    equipmentSettingsAct->setEnabled(true);
+    const bool canCreate     = db.hasPermission(authUser, "create_documents");
+    const bool canOpen       = db.hasPermission(authUser, "open_documents");
+    const bool canSave       = db.hasPermission(authUser, "save_documents");
+    const bool canDelete     = db.hasPermission(authUser, "delete_documents");
+    const bool canConfigScr  = db.hasPermission(authUser, "change_screen_config");
+    const bool canManageUser = db.hasPermission(authUser, "manage_users");
+    const bool canConfigNet  = db.hasPermission(authUser, "change_network_settings");
+    const bool canConfigDb   = db.hasPermission(authUser, "change_database_settings");
 
-    bool canCreate = db.hasPermission(currentUser, "create_documents");
     newAntAct->setEnabled(canCreate);
     newTxAct->setEnabled(canCreate);
     newModAct->setEnabled(canCreate);
     newEnrAct->setEnabled(canCreate);
-    qDebug() << "[Permissions] create_documents:" << canCreate;
-
-    bool canOpen = db.hasPermission(currentUser, "open_documents");
     openAct->setEnabled(canOpen);
-    qDebug() << "[Permissions] open_documents:" << canOpen;
-
-    bool canSave = db.hasPermission(currentUser, "save_documents");
     saveAct->setEnabled(canSave);
     saveAsAct->setEnabled(canSave);
-    qDebug() << "[Permissions] save_documents:" << canSave;
-
-    bool canDelete = db.hasPermission(currentUser, "delete_documents");
     closeAct->setEnabled(canDelete);
-    qDebug() << "[Permissions] delete_documents:" << canDelete;
+    configAct->setEnabled(canConfigScr);
+    userConfigAct->setEnabled(canManageUser);
+    changePasswordAct->setEnabled(true);
+    serverClientConfigAct->setEnabled(canConfigNet);
+    databaseConfigAct->setEnabled(canConfigDb);
+    equipmentSettingsAct->setEnabled(true);
+    equipmentConfigAct->setEnabled(true);
 
-    bool canConfigScreen = db.hasPermission(currentUser, "change_screen_config");
-    configAct->setEnabled(canConfigScreen);
-    qDebug() << "[Permissions] change_screen_config:" << canConfigScreen;
-
-    bool canManageUsers = db.hasPermission(currentUser, "manage_users");
-    userConfigAct->setEnabled(canManageUsers);
-    qDebug() << "[Permissions] manage_users:" << canManageUsers;
-
-    bool canConfigNetwork = db.hasPermission(currentUser, "change_network_settings");
-    serverClientConfigAct->setEnabled(canConfigNetwork);
-
-    bool canConfigDatabase = db.hasPermission(currentUser, "change_database_settings");
-    databaseConfigAct->setEnabled(canConfigDatabase);
+    qDebug() << "[Permissions] canCreate:" << canCreate
+             << "canOpen:" << canOpen
+             << "canSave:" << canSave
+             << "canDelete:" << canDelete
+             << "canManageUser:" << canManageUser;
 }
 
 void MainWindow::showUserManagement()
 {
-    QString currentUser = authComboBox->currentText();
-    if (currentUser.isEmpty()) {
+    // ========================================================================
+    // 1. Проверка доступа — только авторизованный пользователь с правом
+    //    manage_users. Смена без авторизации — не может управлять пользователями.
+    // ========================================================================
+    if (m_authUser.isEmpty()) {
         QMessageBox::warning(this, "Доступ запрещён",
             "Необходима авторизация для доступа к конфигурации пользователей.");
         return;
     }
 
-    if (!DatabaseManager::instance().hasPermission(currentUser, "manage_users")) {
+    if (!DatabaseManager::instance().hasPermission(m_authUser, "manage_users")) {
         QMessageBox::warning(this, "Доступ запрещён",
             "Только администратор может управлять пользователями.");
         return;
@@ -1242,55 +1683,128 @@ void MainWindow::showUserManagement()
         return;
     }
 
-    QString currentUserBefore = authComboBox->currentText();
-    bool wasAuthenticated = !currentUserBefore.isEmpty();
+    // ========================================================================
+    // 2. Запоминаем состояние ДО открытия диалога.
+    // ========================================================================
+    const QString authUserBefore  = m_authUser;
+    const QString shiftUserBefore = m_shiftUser;
+    const bool    wasAuthenticated = !authUserBefore.isEmpty();
+    const bool    hadShift         = !shiftUserBefore.isEmpty();
 
+    // ========================================================================
+    // 3. Открываем диалог управления пользователями.
+    // ========================================================================
     UserManagementDialog dlg(this);
     dlg.exec();
 
+    // ========================================================================
+    // 4. Перечитываем список пользователей из БД.
+    // ========================================================================
     QStringList users = DatabaseManager::instance().getUsernames();
+
+    // ========================================================================
+    // 5. Обновляем ComboBox «Смену принял».
+    // ========================================================================
+    if (shiftComboBox) {
+        shiftComboBox->blockSignals(true);
+        shiftComboBox->clear();
+        shiftComboBox->addItems(users);
+
+        if (hadShift) {
+            const int newIdx = users.indexOf(shiftUserBefore);
+            if (newIdx >= 0) {
+                // Пользователь смены ещё существует — восстанавливаем выбор.
+                shiftComboBox->setCurrentIndex(newIdx);
+                m_shiftUser = shiftUserBefore;
+            } else {
+                // ✅ Пользователь смены удалён из БД.
+                qWarning() << "[Shift] Пользователь" << shiftUserBefore
+                           << "удалён из БД — сбрасываем смену";
+
+                shiftComboBox->setCurrentIndex(-1);
+                m_shiftUser.clear();
+            }
+        } else {
+            shiftComboBox->setCurrentIndex(-1);
+            m_shiftUser.clear();
+        }
+
+        shiftComboBox->blockSignals(false);
+    }
+
+    // ========================================================================
+    // 6. Обновляем ComboBox «Авторизация».
+    // ========================================================================
     authComboBox->blockSignals(true);
     authComboBox->clear();
     authComboBox->addItems(users);
 
+    bool authStillValid = false;
     if (wasAuthenticated) {
-        int newIndex = users.indexOf(currentUserBefore);
-        if (newIndex >= 0) {
-            authComboBox->setCurrentIndex(newIndex);
+        const int newIdx = users.indexOf(authUserBefore);
+        if (newIdx >= 0) {
+            // Пользователь авторизации ещё существует — восстанавливаем выбор.
+            authComboBox->setCurrentIndex(newIdx);
+            m_authUser = authUserBefore;
+            authStillValid = true;
         } else {
+            // ✅ Пользователь авторизации удалён из БД.
+            qWarning() << "[Auth] Пользователь" << authUserBefore
+                       << "удалён из БД — сеанс завершён";
+
             authComboBox->setCurrentIndex(-1);
+            m_authUser.clear();
+
+            // Останавливаем таймер авторизации, сбрасываем индикатор.
             authTimer->stop();
             timeLabel->setText("00:00");
             timeLabel->setStyleSheet(
                 "font-family: 'Consolas', 'Courier New', monospace; "
-                "font-weight: bold; "
-                "color: #999999; "
-                "font-size: 15px; "
-                "margin: 0px 8px;"
-            );
+                "font-weight: bold; color: #999999; font-size: 15px; "
+                "margin: 0px 8px;");
+
             QMessageBox::information(this, "Внимание",
                 QString("Пользователь '%1' был удалён из базы данных.\n"
-                    "Сеанс работы завершён.").arg(currentUserBefore));
-            applyUserPermissions();
+                        "Сеанс работы завершён.").arg(authUserBefore));
         }
     } else {
         authComboBox->setCurrentIndex(-1);
+        m_authUser.clear();
     }
 
     authComboBox->blockSignals(false);
+
+    // ========================================================================
+    // 7. Обновляем имя и роль для журнала действий.
+    //    Приоритет: auth → shift → «Аноним».
+    // ========================================================================
+    DatabaseManager::instance().setCurrentUserName(effectiveUserName());
+    DatabaseManager::instance().setCurrentUserRole(effectiveUserRole());
+
+    // ========================================================================
+    // 8. Применяем права заново.
+    //    Если пользователь был удалён — права упадут до смены (или пусто).
+    // ========================================================================
+    applyUserPermissions();
+
+    qDebug() << "[UserManagement] После закрытия диалога:"
+             << "authUser:" << m_authUser
+             << "shiftUser:" << m_shiftUser
+             << "effective:" << effectiveUserName()
+             << "role:" << effectiveUserRole()
+             << "authStillValid:" << authStillValid;
 }
 
 void MainWindow::showChangePassword()
 {
-    QString currentUser = authComboBox->currentText();
-    if (currentUser.isEmpty()) {
+    if (m_authUser.isEmpty()) {
         QMessageBox::warning(this, "Доступ запрещён",
-            "Необходима авторизация для смены пароля.");
+            "Для смены пароля необходимо авторизоваться.");
         return;
     }
 
-    QString role = DatabaseManager::instance().getUserRole(currentUser);
-    ChangePasswordDialog dlg(currentUser, role, this);
+    QString role = DatabaseManager::instance().getUserRole(m_authUser);
+    ChangePasswordDialog dlg(m_authUser, role, this);
     dlg.exec();
 }
 
@@ -1306,13 +1820,17 @@ void MainWindow::showEquipmentSettings()
 
     EquipmentSettingsDialog dlg(this);
     dlg.setDocumentFilePath(activeFilePath);
-    QString currentUser = authComboBox->currentText();
-    dlg.setCurrentUser(currentUser);
+    dlg.setCurrentUser(m_authUser);
     dlg.exec();
 }
 
 void MainWindow::showEquipmentConfig()
 {
+/*    if (m_authUser.isEmpty()) {
+        QMessageBox::warning(this, "Требуется авторизация",
+            "Для изменения настроек необходимо авторизоваться.");
+        return;
+    }*/
     QString activeFilePath = getActiveDocumentPath();
     if (activeFilePath.isEmpty()) {
         QMessageBox::warning(this, "Нет активного окна",
@@ -1335,8 +1853,7 @@ void MainWindow::showEquipmentConfig()
     EquipmentConfigDialog dlg(this);
     dlg.setDocumentType(docType);
     dlg.setDocumentFilePath(activeFilePath);
-    QString currentUser = authComboBox->currentText();
-    dlg.setCurrentUser(currentUser);
+    dlg.setCurrentUser(m_authUser);
     dlg.exec();
 }
 
@@ -1362,12 +1879,15 @@ QStringList MainWindow::getEquipmentConnectionNames(DocType type)
                 << "Усилитель мощности \"В\""
                 << "Усилитель мощности \"С\""
                 << "Переключатель УМ"
-                << "UP/C основной 1"
-                << "UP/C основной 2"
-                << "UP/C основной 3"
-                << "UP/C основной 4"
-                << "UP/C резервный"
-                << "Переключатель UP/C"
+                << "UP/C основной (комплект 1)"
+                << "UP/C резервный (комплект 1)"
+                << "Переключатель UP/C (комплект 1)"
+                << "UP/C основной (комплект 2)"
+                << "UP/C резервный (комплект 2)"
+                << "Переключатель UP/C (комплект 2)"
+                << "UP/C основной (комплект 3)"
+                << "UP/C резервный (комплект 3)"
+                << "Переключатель UP/C (комплект 3)"
                 << "Дегидратор"
                 << "Температура";
         case DocType::Modulator:
@@ -1439,15 +1959,15 @@ QList<QPair<QString, int>> MainWindow::getEquipmentListForRow(DocType type, int 
                     result << qMakePair(QString("FRABA OCD-DPB1B"), ID_ENC_FRABA_OCD_DPB1B);
                     break;
                 default:
-                    result << qMakePair(QString("Устройство 1"), ID_UNKNOWN);
+                    result << qMakePair(QString("(Не выбрано)"), ID_UNKNOWN);
                     break;
             }
             break;
         case DocType::Transmitter:
             switch (rowIndex) {
-                case 0:
-                case 1:
-                case 2:
+                case 0: // Усилитель мощности "А"
+                case 1: // Усилитель мощности "В"
+                case 2: // Усилитель мощности "С"
                     result << qMakePair(QString("Advantech ARMAC-250"), ID_TX_ADVANTECH_ARMAC_250);
                     result << qMakePair(QString("Advantech ARMAG-CRL400"), ID_TX_ADVANTECH_ARMAG_CRL400);
                     result << qMakePair(QString("CPI VZU-6997AC"), ID_TX_CPI_VZU_6997AC);
@@ -1469,7 +1989,7 @@ QList<QPair<QString, int>> MainWindow::getEquipmentListForRow(DocType type, int 
                     result << qMakePair(QString("Radis UM5765-600P"), ID_TX_RADIS_UM5765_600P);
                     result << qMakePair(QString("Probecom KA 40W BUC"), ID_TX_PROBECOM_40W_KA_BUC);
                     break;
-                case 3:
+                case 3: // Переключатель усилителей мощности
                     result << qMakePair(QString("Internal Switch"), ID_TX_SW_INTERNAL);
                     result << qMakePair(QString("CPI NCB-1100X"), ID_TX_SW_CPI_NCB_1100X);
                     result << qMakePair(QString("Varian VJC-6767S"), ID_TX_SW_VARIAN_VJC_6767S);
@@ -1480,34 +2000,37 @@ QList<QPair<QString, int>> MainWindow::getEquipmentListForRow(DocType type, int 
                     result << qMakePair(QString("CPI 0103233001 (1k2)"), ID_TX_SW_CPI_MODEL_0103233001_1k2);
                     result << qMakePair(QString("CPI 0103233001 (1k1)"), ID_TX_SW_CPI_MODEL_0103233001_1k1);
                     break;
-                case 4:
-                case 5:
-                case 6:
-                case 7:
-                case 8:
+                case 4: // UP/C основной (Комплект 1)
+                case 5: // UP/C резервный (Комплект 1)
+                case 7: // UP/C основной (Комплект 2)
+                case 8: // UP/C резервный (Комплект 2)
+                case 10: // UP/C основной (Комплект 3)
+                case 11: // UP/C резервный (Комплект 3)
                     result << qMakePair(QString("Comtech UT-4500"), ID_UPC_COMTECH_UT_4500);
                     result << qMakePair(QString("WSI UT-4500"), ID_UPC_WSI_UT_4500);
                     result << qMakePair(QString("Miteq U-9900"), ID_UPC_MITEQ_U_9900);
                     result << qMakePair(QString("Peak IBU655"), ID_UPC_PEAK_IBU655);
                     break;
-                case 9:
+                case 6: // Переключатель UP/C (Комплект 1)
+                case 9: // Переключатель UP/C (Комплект 2)
+                case 12: // Переключатель UP/C (Комплект 3)
                     result << qMakePair(QString("Miteq NSU"), ID_UPC_SW_MITEQ_NSU);
                     result << qMakePair(QString("Peak RCU100"), ID_UPC_SW_PEAK_RCU100);
                     result << qMakePair(QString("Advantech ARUD-LCXR"), ID_UPC_SW_ADVANTECH_ARUD_LCXR);
                     result << qMakePair(QString("IRT IFC-L1C210R-RM00"), ID_UPC_SW_IRT_IFC_L1C210R_RM00);
                     break;
-                case 10:
+                case 13: // дегидратор
                     result << qMakePair(QString("EDH-4"), ID_DEHYD_EDH_4);
                     result << qMakePair(QString("ADH Netcom"), ID_DEHYD_ADH_NETCOM);
                     result << qMakePair(QString("HR150"), ID_DEHYD_HR150);
                     result << qMakePair(QString("ADBKP-2"), ID_DEHYD_ADBKP_2);
                     break;
-                case 11:
+                case 14: // Температура
                     result << qMakePair(QString("TE Monitor V6"), ID_TEMP_SNS_TE_MONITOR_V6);
                     result << qMakePair(QString("Boreas 3"), ID_TEMP_SNS_BOREAS_3);
                     break;
                 default:
-                    result << qMakePair(QString("Устройство 1"), ID_UNKNOWN);
+                    result << qMakePair(QString("(Не выбрано)"), ID_UNKNOWN);
                     break;
             }
             break;
@@ -1531,18 +2054,18 @@ QList<QPair<QString, int>> MainWindow::getEquipmentListForRow(DocType type, int 
                 result << qMakePair(QString("Newtec SW 0212"), ID_MOD_SW_NEWTEC_0212);
                 break;
             case 4: // Анализатор потока
-                result << qMakePair(QString("(Не выбран)"), ID_UNKNOWN);
+                result << qMakePair(QString("(Не выбрано)"), ID_UNKNOWN);
                 break;
             default:
-                result << qMakePair(QString("Устройство (не выбрано)"), ID_UNKNOWN);
+                result << qMakePair(QString("(Не выбрано)"), ID_UNKNOWN);
                 break;
             }
             break;
         case DocType::Energo:
-            result << qMakePair(QString("Оборудование (не выбрано)"), ID_UNKNOWN);
+            result << qMakePair(QString("(Не выбрано)"), ID_UNKNOWN);
             break;
         default:
-            result << qMakePair(QString("Устройство 1"), ID_UNKNOWN);
+            result << qMakePair(QString("(Не выбрано)"), ID_UNKNOWN);
             break;
     }
 
@@ -1609,14 +2132,13 @@ void MainWindow::saveEquipmentConnections(const QString &filePath, const QList<E
 
 void MainWindow::showServerClientConfig()
 {
-    QString currentUser = authComboBox->currentText();
-    if (currentUser.isEmpty()) {
+    if (m_authUser.isEmpty()) {
         QMessageBox::warning(this, "Доступ запрещён",
             "Необходима авторизация для изменения конфигурации сервера/клиента.");
         return;
     }
 
-    if (!DatabaseManager::instance().hasPermission(currentUser, "change_network_settings")) {
+    if (!DatabaseManager::instance().hasPermission(m_authUser, "change_network_settings")) {
         QMessageBox::warning(this, "Доступ запрещён",
             "Только администратор может изменять конфигурацию сервера/клиента.");
         return;
@@ -1664,14 +2186,13 @@ void MainWindow::loadDatabaseConfig()
 
 void MainWindow::showDatabaseConfig()
 {
-    QString currentUser = authComboBox->currentText();
-    if (currentUser.isEmpty()) {
+    if (m_authUser.isEmpty()) {
         QMessageBox::warning(this, "Доступ запрещён",
             "Необходима авторизация для изменения конфигурации базы данных.");
         return;
     }
 
-    if (!DatabaseManager::instance().hasPermission(currentUser, "change_database_settings")) {
+    if (!DatabaseManager::instance().hasPermission(m_authUser, "change_database_settings")) {
         QMessageBox::warning(this, "Доступ запрещён",
             "Только администратор может изменять конфигурацию базы данных.");
         return;
@@ -1695,8 +2216,11 @@ void MainWindow::forceAuthenticate(const QString &username)
     authComboBox->setCurrentIndex(index);
     authComboBox->blockSignals(false);
 
+    m_authUser = username;
+
     QString role = DatabaseManager::instance().getUserRole(username);
     DatabaseManager::instance().setCurrentUserRole(role);
+    DatabaseManager::instance().setCurrentUserName(username);
 
     authTimeSeconds = 1800;
     timeLabel->setText("30:00");
@@ -1715,15 +2239,22 @@ void MainWindow::forceAuthenticate(const QString &username)
              << "роль:" << role;
 }
 
-void MainWindow::applyGridLayout()
+void MainWindow::applyGridLayout(int groupId)
 {
-    int cols = qMax(1, config.columns);
-    int count = config.docPaths.size();
+    if (groupId < 0 || groupId >= m_groupAreas.size()) return;
+
+    QMdiArea *area = m_groupAreas[groupId];
+    if (!area) return;
+
+    const DocGroup &g = config.groups[groupId];
+    const int cols = qMax(1, g.columns);
+    const int count = g.docPaths.size();
     if (count == 0) return;
 
-    QSize vpSize = mdiArea ? mdiArea->viewport()->size() : QSize();
+    QSize vpSize = area->viewport()->size();
     if (vpSize.width() <= 0 || vpSize.height() <= 0) {
-        QTimer::singleShot(50, this, &MainWindow::applyGridLayout);
+        // Пока QMdiArea не отрисована — откладываем.
+        QTimer::singleShot(50, this, [this, groupId]() { applyGridLayout(groupId); });
         return;
     }
 
@@ -1731,7 +2262,7 @@ void MainWindow::applyGridLayout()
 
     QVector<int> colMaxWidth(cols, 0);
     for (int i = 0; i < count; ++i) {
-        BaseDocWidget *doc = findWidgetByPath(config.docPaths.at(i));
+        BaseDocWidget *doc = findWidgetByPath(g.docPaths.at(i));
         if (doc) {
             int col = i % cols;
             QSize sz = doc->documentFixedSize();
@@ -1750,7 +2281,7 @@ void MainWindow::applyGridLayout()
             for (int c = 0; c < cols; ++c) {
                 int idx = (r - 1) * cols + c;
                 if (idx < count) {
-                    BaseDocWidget *d = findWidgetByPath(config.docPaths.at(idx));
+                    BaseDocWidget *d = findWidgetByPath(g.docPaths.at(idx));
                     if (d) {
                         int h = d->documentFixedSize().height();
                         if (h > maxH) maxH = h;
@@ -1764,29 +2295,25 @@ void MainWindow::applyGridLayout()
 
     QVector<int> columnOffset(cols, 0);
     for (int i = 0; i < count; ++i) {
-        const QString &path = config.docPaths.at(i);
+        const QString &path = g.docPaths.at(i);
         BaseDocWidget *doc = findWidgetByPath(path);
         if (!doc) continue;
 
         int row = i / cols;
         int col = i % cols;
-
         QSize sz = doc->documentFixedSize();
 
         int currentX = margin;
         for (int c = 0; c < col; ++c) {
             currentX += colMaxWidth[c] + margin;
         }
-
         int currentY = rowY[row] + columnOffset[col];
 
-        if (mdiArea) {
-            for (QMdiSubWindow *sw : mdiArea->subWindowList()) {
-                if (sw->widget() == doc) {
-                    sw->setGeometry(currentX, currentY, sz.width(), sz.height());
-                    sw->raise();
-                    break;
-                }
+        for (QMdiSubWindow *sw : area->subWindowList()) {
+            if (sw->widget() == doc) {
+                sw->setGeometry(currentX, currentY, sz.width(), sz.height());
+                sw->raise();
+                break;
             }
         }
 
@@ -1801,20 +2328,43 @@ void MainWindow::applyGridLayout()
                     panelHeight
                 );
                 panelSub->raise();
-                columnOffset[col] += panelHeight + margin;
+                columnOffset[col] += panelHeight;
             }
         }
     }
-    // ✅ НОВОЕ: Гарантируем обновление области прокрутки после изменения геометрии окон
-    if (mdiArea) {
-        mdiArea->viewport()->update();
+
+    area->viewport()->update();
+}
+
+void MainWindow::applyGridLayoutAll()
+{
+    for (int i = 0; i < m_groupAreas.size(); ++i) {
+        applyGridLayout(i);
     }
 }
 
 void MainWindow::updateAlarmPanelForDoc(const QString &docPath,
                                         const QList<int> &codes,
-                                        const QList<int> &statuses)
+                                        const QList<int> &statuses,
+                                        const QDateTime &cycleTime)
 {
+    // Обновляем счётчик критических аварий по документу.
+    int criticalCount = 0;
+    for (int s : statuses) {
+        if (s == 1) ++criticalCount;   // 1 = Critical
+    }
+    if (criticalCount == 0) {
+        m_docCriticalCount.remove(docPath);
+    } else {
+        m_docCriticalCount[docPath] = criticalCount;
+    }
+    // Пересчитываем счётчик группы этого документа.
+    const int groupId = findGroupIdByDocPath(docPath);
+    if (groupId >= 0) {
+        recalcGroupCriticalCount(groupId);
+        updateTabAppearance(groupId);
+    }
+
     if (codes.isEmpty()) {
         removeAlarmPanelForDoc(docPath);
         return;
@@ -1823,23 +2373,31 @@ void MainWindow::updateAlarmPanelForDoc(const QString &docPath,
     BaseDocWidget *doc = findWidgetByPath(docPath);
     if (!doc) return;
 
+    // Находим группу и окно документа.
+    if (groupId < 0 || groupId >= m_groupAreas.size()) return;
+    QMdiArea *area = m_groupAreas[groupId];
+    if (!area) return;
+
     QMdiSubWindow *docSubWindow = nullptr;
-    if (mdiArea) {
-        for (QMdiSubWindow *sw : mdiArea->subWindowList()) {
-            if (sw->widget() == doc) {
-                docSubWindow = sw;
-                break;
-            }
+    for (QMdiSubWindow *sw : area->subWindowList()) {
+        if (sw->widget() == doc) {
+            docSubWindow = sw;
+            break;
         }
     }
-
     if (!docSubWindow) return;
 
     if (!m_alarmPanels.contains(docPath)) {
-        AlarmPanel *panel = new AlarmPanel(mdiArea);
-        FixedSubWindow *panelSub = new FixedSubWindow(panel, mdiArea);
+        AlarmPanel *panel = new AlarmPanel(area);
+        FixedSubWindow *panelSub = new FixedSubWindow(panel, area);
         panelSub->setAttribute(Qt::WA_DeleteOnClose);
         m_alarmPanels[docPath] = panelSub;
+
+        // подключаем подтверждение аварии к документу.
+        //    Пока логика в BaseDocWidget не реализована, лог подтвердит,
+        //    что сигнал доходит.
+        connect(panel, &AlarmPanel::alarmAcknowledged,
+                doc, &BaseDocWidget::onAlarmAcknowledged);
 
         QPointer<MainWindow> safeThis(this);
         connect(panelSub, &QMdiSubWindow::destroyed, this, [safeThis, docPath]() {
@@ -1852,8 +2410,8 @@ void MainWindow::updateAlarmPanelForDoc(const QString &docPath,
     if (panelSub) {
         AlarmPanel *panel = qobject_cast<AlarmPanel*>(panelSub->widget());
         if (panel) {
-            panel->setAlarms(codes, statuses);
-            int docWidth = docSubWindow->width();
+        panel->setAlarms(codes, statuses, cycleTime);
+        int docWidth = docSubWindow->width();
             int panelHeight = panel->calculateHeight();
             panelSub->setFixedSize(docWidth, panelHeight);
             QRect docRect = docSubWindow->geometry();
@@ -1868,25 +2426,32 @@ void MainWindow::updateAlarmPanelForDoc(const QString &docPath,
         }
     }
 
-    applyGridLayout();
+    applyGridLayout(groupId);
 }
 
 void MainWindow::removeAlarmPanelForDoc(const QString &docPath)
 {
+    // Убираем документ из счётчиков.
+    m_docCriticalCount.remove(docPath);
+    const int groupId = findGroupIdByDocPath(docPath);
+    if (groupId >= 0) {
+        recalcGroupCriticalCount(groupId);
+        updateTabAppearance(groupId);
+    }
+
     if (m_alarmPanels.contains(docPath)) {
         QMdiSubWindow *panelSub = qobject_cast<QMdiSubWindow*>(m_alarmPanels[docPath]);
-        if (panelSub) {
-            panelSub->close();
-        }
+        if (panelSub) panelSub->close();
         m_alarmPanels.remove(docPath);
-        applyGridLayout();
+
+        const int groupId = findGroupIdByDocPath(docPath);
+        if (groupId >= 0) applyGridLayout(groupId);
     }
 }
 
 
 void MainWindow::onViewDataAction()
 {
-    // Получаем текущий активный документ
     BaseDocWidget *currentDoc = getCurrentDocument();
     if (!currentDoc) {
         QMessageBox::warning(this, "Ошибка", "Нет активного документа");
@@ -1902,20 +2467,478 @@ void MainWindow::onViewDataAction()
         default: return;
     }
 
-    DataViewDialog *dlg = new DataViewDialog(currentDoc->filePath(), docType, this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    dlg->show();
+    // ✅ Модальный диалог
+    DataViewDialog dlg(currentDoc->filePath(), docType, this);
+    dlg.exec();
 }
 
-BaseDocWidget* MainWindow::getCurrentDocument() const
+
+void MainWindow::showUserActionLog()
 {
-    // Получаем активное подокно из MDI-области
-    QMdiSubWindow *activeSubWindow = mdiArea ? mdiArea->activeSubWindow() : nullptr;
-    if (!activeSubWindow) return nullptr;
-
-    QWidget *widget = activeSubWindow->widget();
-    if (!widget) return nullptr;
-
-    // Приводим к BaseDocWidget
-    return qobject_cast<BaseDocWidget*>(widget);
+    UserActionLogDialog dlg(this);
+    dlg.exec();
 }
+
+void MainWindow::showDriverConfigEditor()
+{
+    if (m_authUser.isEmpty()) {
+        QMessageBox::warning(this, "Доступ запрещён",
+            "Необходима авторизация для доступа к конфигам драйверов.");
+        return;
+    }
+    if (!DatabaseManager::instance().hasPermission(m_authUser, "edit_driver_config")) {
+        QMessageBox::warning(this, "Доступ запрещён",
+            "Только администратор может редактировать конфиги драйверов.");
+        return;
+    }
+
+    DriverConfigEditorDialog dlg(this);
+    dlg.exec();
+}
+
+QMdiArea* MainWindow::activeArea() const
+{
+    if (!m_groupTabs) return nullptr;
+    const int i = m_groupTabs->currentIndex();
+    if (i < 0 || i >= m_groupAreas.size()) return nullptr;
+    return m_groupAreas[i];
+}
+
+int MainWindow::findGroupIdByDocPath(const QString &path) const
+{
+    const QString clean = QDir::cleanPath(QDir::toNativeSeparators(path));
+    for (int i = 0; i < config.groups.size(); ++i) {
+        for (const QString &p : config.groups[i].docPaths) {
+            if (QDir::cleanPath(QDir::toNativeSeparators(p)) == clean) {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+void MainWindow::onTabBlinkTimeout()
+{
+    if (!m_groupTabs) return;
+    m_groupTabs->setBlinkState(!m_groupTabs->isBlinkOn());
+}
+
+void MainWindow::updateTabAppearance(int groupId)
+{
+    Q_UNUSED(groupId);
+    if (!m_groupTabs) return;
+
+    if (!m_groupTabs->isVisible()) {
+        m_groupTabs->setCriticalGroups({});
+        return;
+    }
+
+    QSet<int> critical;
+    for (int i = 0; i < m_groupCriticalCount.size(); ++i) {
+        if (m_groupCriticalCount[i] > 0) critical.insert(i);
+    }
+    m_groupTabs->setCriticalGroups(critical);
+}
+
+void MainWindow::moveDocumentToGroup(const QString &docPath, int newGroupId)
+{
+    const int oldGroupId = findGroupIdByDocPath(docPath);
+    if (oldGroupId < 0) {
+        qWarning() << "[MainWindow] moveDocumentToGroup: документ не найден:" << docPath;
+        return;
+    }
+    if (oldGroupId == newGroupId) return;
+
+    if (newGroupId < 0 || newGroupId >= m_groupAreas.size()) {
+        qWarning() << "[MainWindow] moveDocumentToGroup: неверный newGroupId:" << newGroupId;
+        return;
+    }
+
+    QMdiArea *oldArea = m_groupAreas[oldGroupId];
+    QMdiArea *newArea = m_groupAreas[newGroupId];
+
+    // 1. Находим FixedSubWindow в старой группе.
+    BaseDocWidget *doc = nullptr;
+    FixedSubWindow *oldSub = nullptr;
+    for (QMdiSubWindow *sw : oldArea->subWindowList()) {
+        auto *fixed = qobject_cast<FixedSubWindow*>(sw);
+        if (fixed && fixed->widget()) {
+            auto *w = qobject_cast<BaseDocWidget*>(fixed->widget());
+            if (w && w->filePath() == docPath) {
+                doc = w;
+                oldSub = fixed;
+                break;
+            }
+        }
+    }
+
+    if (!doc || !oldSub) {
+        qWarning() << "[MainWindow] moveDocumentToGroup: подокно не найдено для:" << docPath;
+        return;
+    }
+
+    // 2. Удаляем панель аварий (в старой группе). В новой пересоздастся.
+    removeAlarmPanelForDoc(docPath);
+
+    // 3. Отвязываем виджет от подокна, чтобы QMdiSubWindow не удалил его.
+    oldSub->setWidget(nullptr);
+
+    // 3.5. Отключаем старый обработчик destroyed, чтобы при удалении oldSub
+    //      документ не был удалён из конфига.
+    disconnect(oldSub, &QMdiSubWindow::destroyed, nullptr, nullptr);
+
+    // 4. Удаляем старое подокно.
+    oldSub->deleteLater();
+
+    // 5. Создаём новое подокно в новой группе.
+    FixedSubWindow *newSub = new FixedSubWindow(doc, newArea);
+    newSub->setGroupId(newGroupId);
+    newSub->setAttribute(Qt::WA_DeleteOnClose);
+    newSub->setFixedSize(doc->documentFixedSize());
+    newSub->show();
+
+    // 6. Обработчик destroyed — привязываем заново на новое подокно.
+    //    Старый обработчик привязан к oldSub — он удалится вместе с oldSub,
+    //    но нам нужен новый для newSub.
+    QString cleanPath = QDir::cleanPath(QDir::toNativeSeparators(docPath));
+    QPointer<MainWindow> safeThis(this);
+    connect(newSub, &QMdiSubWindow::destroyed, this, [safeThis, cleanPath]() {
+        if (!safeThis) return;
+        QTimer::singleShot(0, safeThis.data(), [safeThis, cleanPath]() {
+            if (!safeThis) return;
+            safeThis->removeDocumentPath(cleanPath);
+            safeThis->applyGridLayoutAll();
+            if (safeThis->m_mode == AppMode::Server) {
+                safeThis->broadcastConfigToClients();
+            }
+        });
+    });
+
+    // 7. Обновляем конфиг: убираем из старой группы, добавляем в новую.
+    config.groups[oldGroupId].docPaths.removeAll(docPath);
+    if (!config.groups[newGroupId].docPaths.contains(docPath)) {
+        config.groups[newGroupId].docPaths.append(docPath);
+    }
+
+    // 8. Пересчитываем layout обеих групп.
+    applyGridLayout(oldGroupId);
+    applyGridLayout(newGroupId);
+}
+
+void MainWindow::applyScreenConfig(const QList<DocGroup> &newGroups)
+{
+    if (newGroups.isEmpty()) {
+        qWarning() << "[MainWindow] applyScreenConfig: пустой список групп";
+        return;
+    }
+
+    qDebug() << "[applyScreenConfig] Начало. Групп:" << newGroups.size();
+    for (const DocGroup &g : newGroups) {
+        qDebug() << "  group" << g.name
+                 << "columns=" << g.columns
+                 << "docs=" << g.docPaths.size();
+    }
+
+    const QList<DocGroup> oldGroups = config.groups;
+
+    QMap<QString, int> oldIndexByName;
+    for (int i = 0; i < oldGroups.size(); ++i) {
+        oldIndexByName[oldGroups[i].name] = i;
+    }
+    QMap<QString, int> newIndexByName;
+    for (int i = 0; i < newGroups.size(); ++i) {
+        newIndexByName[newGroups[i].name] = i;
+    }
+
+    // ==================================================================
+    // ШАГ 1. Определить физические переезды документов.
+    //   Для каждого документа в новой структуре — найти его старую группу
+    //   и сравнить с новой. Если разные — переехать.
+    // ==================================================================
+    struct Move { QString path; int oldGroup; int newGroup; };
+    QList<Move> moves;
+
+    // Собираем карту: path → oldGroupId (по oldGroups).
+    QMap<QString, int> docOldGroup;
+    for (int i = 0; i < oldGroups.size(); ++i) {
+        for (const QString &path : oldGroups[i].docPaths) {
+            docOldGroup[path] = i;
+        }
+    }
+
+    // Для каждого документа в новой структуре — где он был и куда переехал.
+    for (int newIdx = 0; newIdx < newGroups.size(); ++newIdx) {
+        for (const QString &path : newGroups[newIdx].docPaths) {
+            if (!docOldGroup.contains(path)) {
+                // Новый документ (не должно быть — диалог не добавляет документы).
+                continue;
+            }
+            int oldIdx = docOldGroup[path];
+            if (oldIdx == newIdx) continue;
+
+            // Проверяем: старая группа и новая группа — это ОДНА и та же
+            // физическая группа (по имени)? Если имена совпадают — это не
+            // переезд, а просто изменение индекса из-за перестановки групп.
+            const QString &oldName = oldGroups[oldIdx].name;
+            const QString &newName = newGroups[newIdx].name;
+            if (oldName == newName) {
+                // Та же группа, только индекс сдвинулся. Это не переезд.
+                continue;
+            }
+
+            moves.append({ path, oldIdx, newIdx });
+        }
+    }
+
+    qDebug() << "[applyScreenConfig] Физических переездов:" << moves.size();
+
+    // ==================================================================
+    // ШАГ 2. Выполнить физические переезды (QMdiSubWindow между QMdiArea).
+    //   Используем moveDocumentToGroup, но он модифицирует config.groups —
+    //   это не страшно, config.groups будет перезаписан на шаге 5.
+    // ==================================================================
+    for (const Move &m : moves) {
+        // moveDocumentToGroup ищет группу через findGroupIdByDocPath,
+        // то есть через config.groups. Старая группа в config.groups
+        // соответствует oldGroups (потому что config.groups ещё не менялся).
+        qDebug() << "[applyScreenConfig] Переезд:" << m.path
+                 << "из" << m.oldGroup << "в" << m.newGroup;
+        moveDocumentToGroup(m.path, m.newGroup);
+    }
+
+    // ==================================================================
+    // ШАГ 3. Удалить исчезнувшие группы (по имени).
+    //   Их документы (если были) уже переехали на шаге 2.
+    //   Но на всякий случай: если группа не пуста, не удаляем.
+    // ==================================================================
+    for (int i = m_groupAreas.size() - 1; i >= 0; --i) {
+        const QString &oldName = config.groups[i].name;
+        if (newIndexByName.contains(oldName)) continue;
+
+        QMdiArea *area = m_groupAreas[i];
+        if (area && !area->subWindowList().isEmpty()) {
+            qWarning() << "[applyScreenConfig] Не удаляем непустую группу:"
+                       << oldName;
+            continue;
+        }
+
+        qDebug() << "[applyScreenConfig] Удаление группы:" << oldName;
+
+        m_groupStack->removeWidget(area);
+        if (area) area->deleteLater();
+
+        m_groupAreas.removeAt(i);
+        m_groupCriticalCount.removeAt(i);
+        m_groupTabs->removeTab(i);
+        config.groups.removeAt(i);
+    }
+
+    // ==================================================================
+    // ШАГ 4. Создать новые группы (по имени).
+    // ==================================================================
+    for (int i = 0; i < newGroups.size(); ++i) {
+        const QString &name = newGroups[i].name;
+
+        bool exists = false;
+        for (const DocGroup &g : config.groups) {
+            if (g.name == name) { exists = true; break; }
+        }
+        if (exists) continue;
+
+        qDebug() << "[applyScreenConfig] Создание группы:" << name;
+
+        QMdiArea *area = new QMdiArea(this);
+        area->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        area->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        area->setOption(QMdiArea::DontMaximizeSubWindowOnActivation, true);
+
+        m_groupStack->addWidget(area);
+        m_groupAreas.append(area);
+        m_groupCriticalCount.append(0);
+        m_groupTabs->addTab(name);
+
+        connect(area, &QMdiArea::subWindowActivated,
+                this, &MainWindow::updateWindowTitle);
+
+        DocGroup g;
+        g.name = name;
+        g.columns = qMax(1, newGroups[i].columns);
+        config.groups.append(g);
+    }
+
+    // ==================================================================
+    // ШАГ 5. Перестроить config.groups из newGroups.
+    //   Здесь документы и columns берутся ИЗ newGroups — это то, что
+    //   пользователь видел в диалоге. Порядок и содержимое — финальные.
+    // ==================================================================
+    QList<DocGroup> finalGroups;
+    for (int i = 0; i < newGroups.size(); ++i) {
+        DocGroup g;
+        g.name = newGroups[i].name;
+        g.columns = qMax(1, newGroups[i].columns);
+        g.docPaths = newGroups[i].docPaths;      // ← ВОТ ГЛАВНОЕ ИСПРАВЛЕНИЕ
+        finalGroups.append(g);
+    }
+    config.groups = finalGroups;
+
+    // ==================================================================
+    // ШАГ 6. Переставить QMdiArea в порядок newGroups.
+    // ==================================================================
+    QList<QMdiArea*> newOrder;
+    QList<int> newCriticalOrder;
+    for (int i = 0; i < newGroups.size(); ++i) {
+        const QString &name = newGroups[i].name;
+        QMdiArea *area = nullptr;
+        int crit = 0;
+        for (int j = 0; j < m_groupAreas.size(); ++j) {
+            if (config.groups[j].name == name) {   // config.groups уже = finalGroups
+                area = m_groupAreas[j];
+                crit = m_groupCriticalCount[j];
+                break;
+            }
+        }
+        if (!area) {
+            qWarning() << "[applyScreenConfig] Не нашли QMdiArea для группы:" << name;
+            area = new QMdiArea(this);
+            area->setOption(QMdiArea::DontMaximizeSubWindowOnActivation, true);
+            m_groupStack->addWidget(area);
+            connect(area, &QMdiArea::subWindowActivated,
+                    this, &MainWindow::updateWindowTitle);
+        }
+        newOrder.append(area);
+        newCriticalOrder.append(crit);
+    }
+    m_groupAreas = newOrder;
+    m_groupCriticalCount = newCriticalOrder;
+
+    // ==================================================================
+    // ШАГ 7. Пересобрать QTabBar.
+    // ==================================================================
+    m_groupTabs->blockSignals(true);
+    while (m_groupTabs->count() > 0) m_groupTabs->removeTab(0);
+    for (const DocGroup &g : config.groups) {
+        m_groupTabs->addTab(g.name);
+    }
+    m_groupTabs->blockSignals(false);
+    // обновляем видимость
+    updateGroupTabsVisibility();
+
+    // ✅ Пересчитываем счётчики для всех групп.
+    for (int i = 0; i < config.groups.size(); ++i) {
+        recalcGroupCriticalCount(i);
+    }
+    for (int i = 0; i < m_groupAreas.size(); ++i) {
+        updateTabAppearance(i);
+    }
+    // ==================================================================
+    // ШАГ 8. Пересчитать layout для всех групп — применит новый порядок
+    //   документов и новые columns.
+    // ==================================================================
+    applyGridLayoutAll();
+
+    // ==================================================================
+    // ШАГ 9. Сохранить и разослать.
+    // ==================================================================
+    saveConfig();
+    if (m_mode == AppMode::Server) {
+        broadcastConfigToClients();
+    }
+
+    qDebug() << "[applyScreenConfig] Завершено";
+}
+
+// mainwindow.cpp
+void MainWindow::updateGroupTabsVisibility()
+{
+    if (!m_groupTabs) return;
+    m_groupTabs->setVisible(m_groupTabs->count() > 1);
+}
+
+void MainWindow::recalcGroupCriticalCount(int groupId)
+{
+    if (groupId < 0 || groupId >= config.groups.size()) return;
+    if (groupId >= m_groupCriticalCount.size()) return;
+
+    const DocGroup &g = config.groups[groupId];
+    int total = 0;
+    for (const QString &path : g.docPaths) {
+        total += m_docCriticalCount.value(path, 0);
+    }
+    m_groupCriticalCount[groupId] = total;
+}
+
+void MainWindow::onShiftComboBoxChanged(int index)
+{
+    // ----------------------------------------------------------------
+    // Снятие выбора: «смену сдал».
+    // ----------------------------------------------------------------
+    if (index < 0) {
+        if (m_shiftUser.isEmpty()) return;
+
+        // Логируем «смену сдал» под именем предыдущего.
+        DatabaseManager::instance().setCurrentUserName(m_shiftUser);
+        DatabaseManager::instance().logUserAction(
+            "Смена", QString(),
+            QString("Смена сдана: %1").arg(m_shiftUser));
+
+        qDebug() << "[Shift] Смена сдана:" << m_shiftUser;
+        m_shiftUser.clear();
+
+        // Если пользователь не авторизован — имя для журнала станет «Аноним».
+        DatabaseManager::instance().setCurrentUserName(effectiveUserName());
+        DatabaseManager::instance().setCurrentUserRole(effectiveUserRole());
+
+        applyUserPermissions();
+        return;
+    }
+
+    // ----------------------------------------------------------------
+    // Выбор пользователя: «смену принял» (с паролем).
+    // ----------------------------------------------------------------
+    const QString username = shiftComboBox->currentText();
+    if (username.isEmpty()) return;
+
+    // ✅ Запрашиваем пароль.
+    AuthDialog authDlg(username, this);
+    if (authDlg.exec() != QDialog::Accepted || !authDlg.isAuthenticated()) {
+        // Отмена или неверный пароль — возвращаем ComboBox в предыдущее состояние.
+        shiftComboBox->blockSignals(true);
+        shiftComboBox->setCurrentIndex(
+            m_shiftUser.isEmpty() ? -1
+                                  : shiftComboBox->findText(m_shiftUser));
+        shiftComboBox->blockSignals(false);
+        return;
+    }
+
+    m_shiftUser = username;
+
+    // ✅ Имя для журнала — по приоритету auth > shift > Аноним.
+    DatabaseManager::instance().setCurrentUserName(effectiveUserName());
+    DatabaseManager::instance().setCurrentUserRole(effectiveUserRole());
+
+    DatabaseManager::instance().logUserAction(
+        "Смена", QString(),
+        QString("Смена принята: %1").arg(username));
+
+    qDebug() << "[Shift] Смена принята:" << username;
+    applyUserPermissions();
+}
+
+QString MainWindow::effectiveUserRole() const
+{
+    if (!m_authUser.isEmpty()) {
+        return DatabaseManager::instance().getUserRole(m_authUser);
+    }
+    return QString();
+}
+
+QString MainWindow::getCurrentUser() const
+{
+    return effectiveUserName();
+}
+
+
+
+
+
+

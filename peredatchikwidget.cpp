@@ -5,6 +5,9 @@
 #include <QJsonDocument>
 #include <QFileInfo>
 #include <QDebug>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <cmath>
 
 PeredatchikWidget::PeredatchikWidget(QWidget *parent)
     : BaseDocWidget(parent), ui(new Ui::PeredatchikForm)
@@ -31,7 +34,7 @@ QSize PeredatchikWidget::documentFixedSize() const
 void PeredatchikWidget::loadFromFile(const QString &path)
 {
     loadFromFilePreserveSections(path);
-    // m_filePath устанавливается в базовом классе, он критически важен для записи в БД
+    // ✅ Загружаем конфигурацию датчиков после чтения файла
 }
 
 void PeredatchikWidget::saveToFile()
@@ -41,7 +44,28 @@ void PeredatchikWidget::saveToFile()
 
 void PeredatchikWidget::processDocClientData(const QJsonObject &data)
 {
-    Q_UNUSED(data);
+    // ✅ Сетевой пакет содержит action + data
+    // (см. broadcastDocUpdate в updateUIFromBuffer).
+    if (data.value("action").toString() != "TransmitterDataUpdate") {
+        return;
+    }
+
+    const QJsonObject payload = data.value("data").toObject();
+    if (payload.isEmpty()) return;
+
+    // ✅ Клиент пишет в свою локальную БД только если сервер
+    // выставил флаг write_to_db (то есть настал момент записи).
+    const bool writeToDb = payload.value("write_to_db").toBool(false);
+
+    if (writeToDb && !m_filePath.isEmpty()) {
+        const bool ok = DatabaseManager::instance().logDocumentData(
+            m_filePath, 2, payload);
+        if (!ok) {
+            qWarning() << "[PeredatchikWidget/CLIENT] ❌ Не удалось записать в БД";
+        } else {
+            qDebug() << "[PeredatchikWidget/CLIENT] ✅ Данные записаны в БД";
+        }
+    }
 }
 
 QJsonObject PeredatchikWidget::getDocumentParameters() const
@@ -67,76 +91,182 @@ void PeredatchikWidget::onApplyClicked()
 }
 
 // ============================================================================
-// ✅ ЭТАП 1: Перехват данных от драйвера (BOREAS-3)
+// ✅ ЭТАП 1: Перехват данных от драйвера (температурный датчик)
 // ============================================================================
-void PeredatchikWidget::processPollResult(int chainId, int deviceIndex, std::shared_ptr<IDeviceData> data)
+void PeredatchikWidget::processPollResult(int chainId, int deviceIndex,
+                                          std::shared_ptr<IDeviceData> data)
 {
-    // 1. Сначала вызываем базовый метод (он обновляет статусы связи, аварии и т.д.)
     BaseDocWidget::processPollResult(chainId, deviceIndex, data);
+    if (!data) return;
 
-    // 2. Проверяем, являются ли пришедшие данные данными от BOREAS-3
-    auto boreasData = std::dynamic_pointer_cast<Boreas3Data>(data);
-    if (boreasData) {
-        // Находим индекс слота в конфигурации по deviceId
-        int slotIndex = -1;
-        auto connections = getEquipmentConnections();
-        for (int i = 0; i < connections.size(); ++i) {
-            if (connections[i].deviceId == boreasData->deviceId()) {
-                slotIndex = i;
-                break;
-            }
+    const int devId = data->deviceId();
+    int slotIndex = -1;
+    const auto connections = getEquipmentConnections();
+    for (int i = 0; i < connections.size(); ++i) {
+        if (connections[i].deviceId == devId) {
+            slotIndex = i;
+            break;
         }
+    }
+    if (slotIndex < 0) return;
 
-        // 3. Если это 12-й слот (индекс 11), обновляем буфер и запускаем цепочку
-        if (slotIndex == 11) {
-            // ✅ Безопасно обновляем буфер записи (потокобезопасно)
-            m_dataBuffer.update([boreasData](TransmitterData &tData) {
-                tData.temperatures[0] = boreasData->temperatures[0];
-                tData.temperatures[1] = boreasData->temperatures[1];
-                tData.temperatures[2] = boreasData->temperatures[2];
-                tData.temperatures[3] = boreasData->temperatures[3];
+    const DeviceErrors devErrors = data->getErrors();
+
+    if (auto tempData = std::dynamic_pointer_cast<TemperaturaData>(data)) {
+        if (slotIndex == 14) {
+            m_dataBuffer.update([tempData, devErrors](TransmitterData &tData) {
+                for (int i = 0; i < 4; ++i) {
+                    tData.temperatures[i] = tempData->temperatures[i];
+                }
+                tData.errorsTemperatura = devErrors;
+                // ✅ НЕ трогаем tData.timestamp — его обновит updateUIFromBuffer()
             });
-
-            // ✅ ЭТАП 2: Синхронный запуск цепочки обработки
-            // Qt::QueuedConnection гарантирует, что processDataChain() выполнится
-            // в главном потоке сразу после возврата из текущего processPollResult
-            QMetaObject::invokeMethod(this, &PeredatchikWidget::processDataChain, Qt::QueuedConnection);
         }
     }
 }
 
+
 // ============================================================================
 // ✅ ЭТАП 3: Цепочка обработки (UI + БД + Клиенты)
 // ============================================================================
-void PeredatchikWidget::processDataChain()
+void PeredatchikWidget::updateUIFromBuffer()
 {
-    // ✅ Читаем последние данные из буфера (getLatest не очищает буфер, предотвращая мерцание)
-    TransmitterData currentData = m_dataBuffer.swapAndGet();
+    // ✅ Вызывается, когда ВСЕ цепочки Fast Pool завершили цикл
+    // (см. connect в BaseDocWidget::loadFromFilePreserveSections).
 
-    // --- А. Обновление Виджета (UI) ---
-    ui->labelTemp1->setText(QString("Температура 1: %1 °C").arg(currentData.temperatures[0], 0, 'f', 1));
-    ui->labelTemp2->setText(QString("Температура 2: %1 °C").arg(currentData.temperatures[1], 0, 'f', 1));
-    ui->labelTemp3->setText(QString("Температура 3: %1 °C").arg(currentData.temperatures[2], 0, 'f', 1));
-    ui->labelTemp4->setText(QString("Температура 4: %1 °C").arg(currentData.temperatures[3], 0, 'f', 1));
+    TransmitterData currentData = m_dataBuffer.getLatest();
 
-    // --- Б. Запись в Базу Данных ---
-    if (!m_filePath.isEmpty()) {
-        // ✅ ПЕРЕДАЁМ ПОЛНЫЙ ПУТЬ! DatabaseManager сам извлечёт и очистит имя.
-        bool success = DatabaseManager::instance().logDocumentData(m_filePath, 2, currentData.toJsonObject());
-        if (!success) {
-            qWarning() << "[PeredatchikWidget] ❌ Не удалось записать данные в БД";
-        } else {
-            qDebug() << "[PeredatchikWidget] ✅ Данные успешно записаны в БД";
+    // ✅ Время из Time Pool-цепочки (фиксируется в рабочем потоке).
+    currentData.timestamp = lastCycleTime();
+
+    // --- А. Обновление UI ---
+    // ✅ Обрабатываем NaN: если значение не получено (датчик отключен или ошибка),
+    //     показываем "--.-"
+    auto formatTemp = [](double t) -> QString {
+        if (std::isnan(t)) return QString("--.-");
+        return QString::number(t, 'f', 1);
+    };
+
+    // ✅ Собираем массив из 4 меток для удобства
+    QLabel *tempLabels[4] = {
+        ui->labelTemp1,
+        ui->labelTemp2,
+        ui->labelTemp3,
+        ui->labelTemp4
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        QLabel *label = tempLabels[i];
+        if (!label) continue;
+
+        // Если конфиг ещё не загружен — показываем по старому (fallback)
+        if (i >= m_tempConfigs.size()) {
+            label->setVisible(true);
+            label->setText(QString("Температура %1: %2 °C")
+                               .arg(i + 1)
+                               .arg(formatTemp(currentData.temperatures[i])));
+            continue;
         }
-    } else {
-        qWarning() << "[PeredatchikWidget] ⚠️ m_filePath пуст, запись в БД пропущена!";
+
+        const PeredatchikTempConfig &cfg = m_tempConfigs[i];
+
+        if (!cfg.active) {
+            // ✅ Скрываем неактивную строку
+            label->setVisible(false);
+            continue;
+        }
+
+        // ✅ Показываем активную строку с именем из настроек
+        label->setVisible(true);
+        label->setText(QString("%1: %2 °C")
+                           .arg(cfg.name)
+                           .arg(formatTemp(currentData.temperatures[i])));
     }
 
-    // --- В. Отправка Клиентам ---
+    // --- Б. Агрегация ошибок по всем устройствам ---
+    currentData.ErrorsAll = buildErrorsAllString();
+
+    // --- В. Определяем, пора ли писать в БД ---
+    //     Счётчик m_msSinceLastDbWrite живёт в BaseDocWidget и
+    //     накапливается каждый цикл. Когда >= db_write_interval —
+    //     выставляем флаг, по которому записывают все (сервер и клиенты).
+    currentData.writeToDb = shouldWriteToDb(currentData.ErrorsAll);
+
+    // --- Г. Запись в БД (только по флагу) ---
+    if (currentData.writeToDb) {
+        if (!m_filePath.isEmpty()) {
+            const bool ok = DatabaseManager::instance().logDocumentData(
+                m_filePath, 2, currentData.toJsonObject());
+            if (!ok) {
+                qWarning() << "[PeredatchikWidget] ❌ Не удалось записать данные в БД";
+            }
+        } else {
+            qWarning() << "[PeredatchikWidget] ⚠️ m_filePath пуст, запись в БД пропущена";
+        }
+    }
+
+    // --- Д. Рассылка клиентам (каждый цикл, флаг уходит в JSON) ---
     QJsonObject networkPayload;
     networkPayload["action"] = "TransmitterDataUpdate";
     networkPayload["data"] = currentData.toJsonObject();
-
-    // Рассылаем всем подключенным клиентам через базовый класс
     broadcastDocUpdate(networkPayload);
+
+    // ✅ Е. ФИНАЛИЗАЦИЯ ЦИКЛА
+    finalizePollCycle();
+}
+
+// ============================================================================
+// ✅ Загрузка конфигурации датчиков температуры из m_fullDocument
+// ============================================================================
+void PeredatchikWidget::loadTemperatureConfigs()
+{
+    m_tempConfigs.clear();
+    m_tempConfigs.resize(4);   // Всегда 4 элемента
+
+    QJsonArray sensorsArray = m_fullDocument.value("temperature_sensors").toArray();
+
+    for (int i = 0; i < 4; ++i) {
+        PeredatchikTempConfig cfg;
+
+        if (i < sensorsArray.size()) {
+            QJsonObject sensorObj = sensorsArray[i].toObject();
+            cfg.name = sensorObj.value("name").toString();
+            cfg.type = sensorObj.value("type").toString("Нет");
+        } else {
+            cfg.type = "Нет";
+        }
+
+        cfg.active = (cfg.type != "Нет");
+
+        // Если имя пустое — используем «Температура N»
+        if (cfg.name.isEmpty()) {
+            cfg.name = QString("Температура %1").arg(i + 1);
+        }
+
+        m_tempConfigs[i] = cfg;
+    }
+
+    qDebug() << "[PeredatchikWidget] loadTemperatureConfigs:"
+             << "активных датчиков:" << std::count_if(
+                    m_tempConfigs.begin(), m_tempConfigs.end(),
+                    [](const PeredatchikTempConfig &c) { return c.active; });
+}
+
+// ============================================================================
+// ✅ Хук после перезагрузки настроек — обновить кэш датчиков
+// ============================================================================
+void PeredatchikWidget::onSettingsReloaded()
+{
+    qDebug() << "[PeredatchikWidget] onSettingsReloaded — перечитываем конфиг датчиков";
+    loadTemperatureConfigs();
+    // UI обновится в следующем цикле updateUIFromBuffer
+}
+
+// ============================================================================
+// ✅ Хук после загрузки файла — загрузить кэш датчиков
+// ============================================================================
+void PeredatchikWidget::onFileLoaded()
+{
+    qDebug() << "[PeredatchikWidget] onFileLoaded — загружаем конфиг датчиков";
+    loadTemperatureConfigs();
 }

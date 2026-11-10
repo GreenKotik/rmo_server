@@ -3,12 +3,17 @@
 
 #include <QDialog>
 #include <QStringList>
+#include <QList>
+#include <QListWidget>
 #include <QTableWidget>
 #include <QMouseEvent>
 #include <QEvent>
 #include <QModelIndex>
 #include <QHeaderView>
 #include <QApplication>
+#include <QSpinBox>
+
+#include "mainwindow.h"   // для DocGroup
 
 namespace Ui {
     class ScreenConfigDialog;
@@ -18,25 +23,51 @@ class ScreenConfigDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit ScreenConfigDialog(int columns, const QStringList &docPaths, QWidget *parent = nullptr);
+    explicit ScreenConfigDialog(const QList<DocGroup> &groups,
+                                QWidget *parent = nullptr);
     ~ScreenConfigDialog();
 
-    int columns() const;
-    QStringList docPaths() const;
+    // ✅ Возвращает итоговый список групп.
+    QList<DocGroup> groups() const { return m_groups; }
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
-    void onColumnsChanged(int newCols);
+    void onGroupSelectionChanged(int row);
+    void onGroupOrderChanged();
+    void onAddGroupClicked();
+    void onRemoveGroupClicked();
+    void onRenameGroupClicked();
+    void onColumnsChanged(int value);
+
 
 private:
-    Ui::ScreenConfigDialog *ui;
-    void rebuildTable(int cols, const QStringList &paths);
+    void rebuildGroupsList();
+    void rebuildDocumentsTable();
+    void refreshDocumentTable(int groupIndex);
+    void updateButtonsState();
 
-    // Состояние перетаскивания
-    int m_dragStartRow = -1;
-    int m_dragStartCol = -1;
+    // ✅ Внутренний DnD
+    void setupDnD();
+    bool handleTableDrag(QEvent *event);
+    bool handleGroupListDrop(QEvent *event);
+
+    // Данные
+    QList<DocGroup> m_groups;
+    int m_currentGroupIndex = -1;
+
+    // UI
+    QListWidget     *m_groupsList        = nullptr;
+    QTableWidget    *m_documentsTable    = nullptr;
+    QSpinBox        *m_columnsSpin       = nullptr;
+    QPushButton     *m_addGroupBtn       = nullptr;
+    QPushButton     *m_removeGroupBtn    = nullptr;
+    QPushButton     *m_renameGroupBtn    = nullptr;
+
+    // Состояние перетаскивания документа
+    int m_dragDocRow = -1;
+    int m_dragDocCol = -1;
     bool m_isDragging = false;
     QPoint m_dragStartPos;
 };

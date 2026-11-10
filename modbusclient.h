@@ -105,6 +105,15 @@ public:
 
     // Расчёт LRC для Modbus ASCII
     static quint8 calculateLRC(const QByteArray &data);
+    // ✅ Modbus ASCII через COM-порт
+    bool connectAscii(const QString &portName, int baudRate = 9600,
+                      QSerialPort::DataBits dataBits = QSerialPort::Data8,
+                      QSerialPort::Parity parity = QSerialPort::NoParity,
+                      QSerialPort::StopBits stopBits = QSerialPort::OneStop,
+                      int timeoutMs = 1000);
+
+    // ✅ Modbus ASCII через TCP (редко, но встречается)
+    bool connectAsciiTcp(const QString &ip, quint16 port = 502, int timeoutMs = 1000);
 
 signals:
     void connected();

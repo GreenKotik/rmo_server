@@ -5,6 +5,7 @@
 #include "devicedata.h"       // ✅ Для ModulatorData
 #include "ledindicator.h"     // ✅ Для LedIndicator
 #include "ringindicator.h"    // ✅ Для RingIndicator
+#include "databuffer.h"
 #include <QJsonObject>
 #include <memory>
 
@@ -32,8 +33,14 @@ public:
 protected:
     // ✅ Переопределяем контекстное меню для добавления пункта "Управление"
     void contextMenuEvent(QContextMenuEvent *event) override;
-    // ✅ Переопределяем для получения данных от драйвера
+    // ✅ Переопределяем — перехват данных от драйвера
     void processPollResult(int chainId, int deviceIndex, std::shared_ptr<IDeviceData> data) override;
+
+    // ✅ Переопределяем — обработка завершения цикла опроса
+    void updateUIFromBuffer() override;
+
+    // ✅ Переопределяем — вызывается после загрузки файла
+    void onFileLoaded() override;
 
 private slots:
     void onFieldChanged();
@@ -43,9 +50,8 @@ private slots:
 private:
     Ui::ModulatorForm *ui;
     ModulatorControlDialog *m_controlDialog = nullptr;  // ✅ НОВОЕ ПОЛЕ
-
-    // ✅ Метод обновления UI из унифицированных данных модулятора
-    void updateUIFromModulatorData(const std::shared_ptr<ModulatorData> &data);
+    // ✅ Двойной буфер для агрегации данных канала модулятора
+    DoubleBuffer<KanalModulatorData> m_dataBuffer;
 };
 
 #endif // MODULATORWIDGET_H

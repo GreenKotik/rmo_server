@@ -149,12 +149,13 @@ bool TcpAsciiClient::isConnected() const
 }
 
 // ============================================================================
-// ✅ ОТПРАВКА И ПРИЁМ ДАННЫХ
+//  ОТПРАВКА И ПРИЁМ ДАННЫХ
 // ============================================================================
 
 bool TcpAsciiClient::sendRaw(const QByteArray &data)
 {
     QMutexLocker locker(&m_mutex);
+    m_lastError.clear();
 
     if (!isConnected()) {
         m_lastError = "Сокет не подключен";
@@ -183,6 +184,7 @@ QByteArray TcpAsciiClient::sendAndWait(const QByteArray &command,
                                         const QByteArray &terminator)
 {
     QMutexLocker locker(&m_mutex);
+    m_lastError.clear();
 
     if (!isConnected()) {
         m_lastError = "Сокет не подключен";
@@ -225,6 +227,7 @@ QByteArray TcpAsciiClient::sendAndWait(const QByteArray &command,
                       .arg(response.size()).arg(expectedMinLength);
     }
 
+    m_lastError.clear();
     return response;
 }
 
@@ -233,6 +236,7 @@ QByteArray TcpAsciiClient::sendAndWaitForTerminator(const QByteArray &command,
                                                      int timeoutMs)
 {
     QMutexLocker locker(&m_mutex);
+    m_lastError.clear();
 
     if (!isConnected()) {
         m_lastError = "Сокет не подключен";
@@ -259,6 +263,7 @@ QByteArray TcpAsciiClient::sendAndWaitForTerminator(const QByteArray &command,
         if (m_socket->waitForReadyRead(100)) {
             response += m_socket->readAll();
             if (response.contains(terminator)) {
+                m_lastError.clear();
                 return response;
             }
         }
@@ -274,6 +279,7 @@ QByteArray TcpAsciiClient::sendAndWaitForTerminator(const QByteArray &command,
 QByteArray TcpAsciiClient::readAvailable(int timeoutMs)
 {
     QMutexLocker locker(&m_mutex);
+    m_lastError.clear();
 
     if (!isConnected()) {
         return QByteArray();
@@ -300,7 +306,7 @@ void TcpAsciiClient::clearBuffer()
 }
 
 // ============================================================================
-// ✅ КОНТРОЛЬНЫЕ СУММЫ
+//  КОНТРОЛЬНЫЕ СУММЫ
 // ============================================================================
 
 quint16 TcpAsciiClient::calculateChecksum(const QByteArray &data, ChecksumType type)
@@ -428,7 +434,7 @@ bool TcpAsciiClient::verifyChecksum(const QByteArray &data, ChecksumType type, i
 }
 
 // ============================================================================
-// ✅ ФОРМАТИРОВАНИЕ ДАННЫХ
+//  ФОРМАТИРОВАНИЕ ДАННЫХ
 // ============================================================================
 
 QByteArray TcpAsciiClient::hexToBytes(const QString &hex)
@@ -467,7 +473,7 @@ QString TcpAsciiClient::bytesToReadable(const QByteArray &data)
 }
 
 // ============================================================================
-// ✅ ВНУТРЕННИЕ МЕТОДЫ
+//  ВНУТРЕННИЕ МЕТОДЫ
 // ============================================================================
 
 bool TcpAsciiClient::waitForData(int timeoutMs)

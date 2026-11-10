@@ -163,6 +163,12 @@ private slots:
         QString role = displayToRole(selectedDisplay);
 
         if (DatabaseManager::instance().addUser(username, password, role)) {
+            // ✅ Логирование добавления пользователя.
+            DatabaseManager::instance().logUserAction(
+                "Пользователи",
+                QString(),
+                QString("Добавлен пользователь '%1' с ролью '%2'")
+                    .arg(username, roleToDisplay(role)));
             QMessageBox::information(this, "Успех", "Пользователь успешно добавлен.");
             loadUsers();
         } else {
@@ -201,6 +207,11 @@ private slots:
             QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
 
             if (DatabaseManager::instance().deleteUser(userId)) {
+                // ✅ Логирование удаления пользователя.
+                DatabaseManager::instance().logUserAction(
+                    "Пользователи",
+                    QString(),
+                    QString("Удалён пользователь '%1'").arg(username));
                 QMessageBox::information(this, "Успех", "Пользователь удалён.");
                 loadUsers();
             } else {
@@ -241,8 +252,22 @@ private slots:
 
         // ✅ КОНВЕРТИРУЕМ В АНГЛИЙСКУЮ ДЛЯ СОХРАНЕНИЯ В БД
         QString newRole = displayToRole(selectedDisplay);
+        // ✅ Запоминаем старую роль для лога.
+        QString oldRole;
+        for (const UserInfo &u : users) {
+            if (u.id == userId) {
+                oldRole = u.role;
+                break;
+            }
+        }
 
         if (DatabaseManager::instance().changeUserRole(userId, newRole)) {
+            // ✅ Логирование смены роли (со старой → новой).
+            DatabaseManager::instance().logUserAction(
+                "Пользователи",
+                QString(),
+                QString("Изменена роль пользователя '%1': '%2' → '%3'")
+                    .arg(username, roleToDisplay(oldRole), roleToDisplay(newRole)));
             QMessageBox::information(this, "Успех", "Роль изменена.");
             loadUsers();
         } else {
@@ -281,6 +306,11 @@ private slots:
         if (!ok || newPassword.isEmpty()) return;
 
         if (DatabaseManager::instance().resetPassword(userId, newPassword)) {
+            // ✅ Логирование сброса пароля (без самого пароля!).
+            DatabaseManager::instance().logUserAction(
+                "Пользователи",
+                QString(),
+                QString("Сброшен пароль пользователя '%1'").arg(username));
             QMessageBox::information(this, "Успех", "Пароль сброшен.");
             loadUsers();
         } else {
@@ -321,6 +351,13 @@ private slots:
             QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
 
             if (DatabaseManager::instance().setUserActive(userId, !currentStatus)) {
+                // ✅ Логирование активации/деактивации.
+                DatabaseManager::instance().logUserAction(
+                    "Пользователи",
+                    QString(),
+                    QString("Пользователь '%1' %2")
+                        .arg(username,
+                             currentStatus ? "деактивирован" : "активирован"));
                 QMessageBox::information(this, "Успех", QString("Пользователь %1.").arg(action + "н"));
                 loadUsers();
             } else {

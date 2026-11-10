@@ -605,3 +605,172 @@ bool SnmpClient::parseSnmpResponse(const QByteArray &response,
 
     return true;
 }
+
+// ============================================================================
+// ✅ SNMP GET MULTI: несколько OID в одном запросе
+// ============================================================================
+bool SnmpClient::getMulti(const QString &ip, int port, const QString &community,
+                          const QStringList &oids, QMap<QString, QVariant> &results,
+                          int timeoutMs)
+{
+    results.clear();
+
+    if (oids.isEmpty()) {
+        m_lastError = "Пустой список OID";
+        return false;
+    }
+
+    // --- Сборка varBindList: SEQUENCE OF { SEQUENCE { OID, NULL } } ---
+    QByteArray varBindListContent;
+    for (const QString &oid : oids) {
+        QByteArray vb = encodeSequence(encodeOid(oid) + encodeNull());
+        varBindListContent.append(vb);
+    }
+
+    QByteArray version   = encodeInteger(0);   // SNMPv1
+    QByteArray comm      = encodeOctetString(community.toUtf8());
+    QByteArray reqId     = encodeInteger(m_requestId++);
+    QByteArray errStatus = encodeInteger(0);
+    QByteArray errIndex  = encodeInteger(0);
+
+    QByteArray pduContent = reqId + errStatus + errIndex
+                            + encodeSequenceOf(varBindListContent);
+    QByteArray pdu;
+    pdu.append(static_cast<char>(SNMP_PDU_GET));
+    pdu.append(encodeLength(pduContent.size()));
+    pdu.append(pduContent);
+
+    QByteArray packet = encodeSequence(version + comm + pdu);
+
+    // --- Отправка ---
+    QByteArray response;
+    if (!sendAndWait(ip, port, packet, response, timeoutMs)) {
+        m_lastError = "Ошибка отправки/приёма SNMP GET (multi)";
+        qWarning() << "[SnmpClient] GETMULTI:" << m_lastError
+                   << "OID count:" << oids.size();
+        return false;
+    }
+
+    // --- Парсинг ---
+    int errorStatus = 0;
+    if (!parseSnmpMultiResponse(response, results, errorStatus)) {
+        m_lastError = "Ошибка парсинга SNMP multi-ответа";
+        qWarning() << "[SnmpClient] GETMULTI:" << m_lastError;
+        return false;
+    }
+
+    if (errorStatus != 0) {
+        m_lastError = QString("SNMP errorStatus = %1").arg(errorStatus);
+        qWarning() << "[SnmpClient] GETMULTI:" << m_lastError;
+        return false;
+    }
+
+    m_lastError.clear();
+    return true;
+}
+
+// ============================================================================
+// ✅ ПАРСИНГ MULTI-ОТВЕТА: обход всего SEQUENCE OF varBind
+// ============================================================================
+bool SnmpClient::parseSnmpMultiResponse(const QByteArray &response,
+                                        QMap<QString, QVariant> &results,
+                                        int &errorStatus)
+{
+    results.clear();
+    errorStatus = 0;
+
+    if (response.size() < 10) {
+        qWarning() << "[SnmpClient] Multi-ответ слишком короткий";
+        return false;
+    }
+
+    int offset = 0;
+
+    // 1. SEQUENCE (весь пакет)
+    if (static_cast<quint8>(response[offset++]) != ASN_SEQUENCE) {
+        qWarning() << "[SnmpClient] Multi: ожидается SEQUENCE";
+        return false;
+    }
+    decodeLength(response, offset);
+
+    // 2. Version
+    if (static_cast<quint8>(response[offset++]) != ASN_INTEGER) return false;
+    offset += decodeLength(response, offset);
+
+    // 3. Community
+    if (static_cast<quint8>(response[offset++]) != ASN_OCTET_STRING) return false;
+    offset += decodeLength(response, offset);
+
+    // 4. PDU RESPONSE
+    if (static_cast<quint8>(response[offset++]) != SNMP_PDU_RESPONSE) {
+        qWarning() << "[SnmpClient] Multi: ожидается RESPONSE PDU";
+        return false;
+    }
+    decodeLength(response, offset);
+
+    // 5. Request ID
+    if (static_cast<quint8>(response[offset++]) != ASN_INTEGER) return false;
+    offset += decodeLength(response, offset);
+
+    // 6. Error Status
+    if (static_cast<quint8>(response[offset++]) != ASN_INTEGER) return false;
+    errorStatus = decodeInteger(response, offset, decodeLength(response, offset));
+
+    // 7. Error Index
+    if (static_cast<quint8>(response[offset++]) != ASN_INTEGER) return false;
+    offset += decodeLength(response, offset);
+
+    // 8. SEQUENCE OF varBinds
+    if (static_cast<quint8>(response[offset++]) != ASN_SEQUENCE) return false;
+    int listLen = decodeLength(response, offset);
+    int listEnd = offset + listLen;
+
+    // 9. Обход всех varBind
+    while (offset < listEnd && offset < response.size()) {
+        // SEQUENCE (varBind)
+        if (static_cast<quint8>(response[offset++]) != ASN_SEQUENCE) break;
+        int vbLen = decodeLength(response, offset);
+        int vbEnd = offset + vbLen;
+
+        // OID
+        if (static_cast<quint8>(response[offset++]) != ASN_OBJECT_ID) break;
+        int oidLen = decodeLength(response, offset);
+        QString oid = decodeOid(response, offset, oidLen);
+
+        // Value
+        quint8 vType = static_cast<quint8>(response[offset++]);
+        int vLen = decodeLength(response, offset);
+        QVariant v;
+        switch (vType) {
+            case ASN_INTEGER:
+                v = decodeInteger(response, offset, vLen);
+                break;
+            case ASN_OCTET_STRING: {
+                QByteArray d = decodeOctetString(response, offset, vLen);
+                QString s = QString::fromUtf8(d);
+                bool ok; double dv = s.toDouble(&ok);
+                v = (ok ? QVariant(dv) : QVariant(s));
+                break;
+            }
+            case ASN_NULL:
+                v = QVariant();
+                offset += vLen;
+                break;
+            case ASN_OBJECT_ID:
+                v = decodeOid(response, offset, vLen);
+                break;
+            default:
+                qWarning() << "[SnmpClient] Multi: неизвестный тип"
+                           << QString::number(vType, 16);
+                offset += vLen;
+                v = QVariant();
+                break;
+        }
+        results[oid] = v;
+
+        // Защита от рассинхронизации парсера
+        offset = vbEnd;
+    }
+
+    return true;
+}

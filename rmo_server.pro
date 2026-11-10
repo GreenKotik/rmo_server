@@ -1,5 +1,4 @@
-QT       += core gui widgets network sql serialport
-QT += printsupport
+QT += core gui widgets network sql serialport multimedia printsupport
 CONFIG   += c++17
 TARGET    = rmo_server
 TEMPLATE  = app
@@ -36,18 +35,27 @@ unix:!macx {
 SOURCES += \
     alarmpanel.cpp \
     alarmregistry.cpp \
+    alarmsoundplayer.cpp \
     boreas3driver.cpp \
     changepassworddialog.cpp \
     commandconfirmdialog.cpp \
     dataviewdialog.cpp \
+    dataviewproxies.cpp \
+    dbloaderworker.cpp \
     devswdriver.cpp \
+    driverconfigeditordialog.cpp \
+    driverconfigmodel.cpp \
     equipmentconfigdialog.cpp \
     equipmentsettingsdialog.cpp \
+    highlightrowdelegate.cpp \
     ledindicator.cpp \
     main.cpp \
     mainwindow.cpp \
+    measurementsmodel.cpp \
     modbusclient.cpp \
+    modulatorconfig.cpp \
     modulatorcontroldialog.cpp \
+    modulatordriver.cpp \
     modulatortab.cpp \
     modulatortabbase.cpp \
     networkcontroller.cpp \
@@ -56,6 +64,7 @@ SOURCES += \
     peredatchikwidget.cpp \
     modulatorwidget.cpp \
     energowidget.cpp \
+    pollchain.cpp \
     pollscheduler.cpp \
     qcustomplot.cpp \
     ringindicator.cpp \
@@ -67,32 +76,44 @@ SOURCES += \
     switchtab.cpp \
     tcpasciiclient.cpp \
     teletehdriver.cpp \
-    temonitorv6driver.cpp
+    temonitorv6driver.cpp \
+    useractionlogdialog.cpp
 
 HEADERS += \
     alarmpanel.h \
     alarmregistry.h \
+    alarmsoundplayer.h \
     authdialog.h \
     authrequireddialog.h \
+    borderedcustomplot.h \
     boreas3driver.h \
     changepassworddialog.h \
+    columnheaders.h \
     commandconfirmdialog.h \
     connectionparamsdialog.h \
     databaseconfigdialog.h \
     databaseinitwizard.h \
     databuffer.h \
     dataviewdialog.h \
+    dataviewproxies.h \
+    dbloaderworker.h \
     devicedata.h \
     deviceids.h \
     devswdriver.h \
+    driverconfigeditordialog.h \
+    driverconfigmodel.h \
     driverfactory.h \
     equipmentconfigdialog.h \
     equipmentsettingsdialog.h \
+    highlightrowdelegate.h \
     idevicedriver.h \
     ledindicator.h \
     mainwindow.h \
+    measurementsmodel.h \
     modbusclient.h \
+    modulatorconfig.h \
     modulatorcontroldialog.h \
+    modulatordriver.h \
     modulatortab.h \
     modulatortabbase.h \
     networkcontroller.h \
@@ -103,6 +124,7 @@ HEADERS += \
     energowidget.h \
     pollchain.h \
     pollscheduler.h \
+    progressdialog.h \
     qcustomplot.h \
     ringindicator.h \
     screenconfigdialog.h \
@@ -115,7 +137,7 @@ HEADERS += \
     tcpasciiclient.h \
     teletehdriver.h \
     temonitorv6driver.h \
-    temperaturedriver.h \
+    useractionlogdialog.h \
     usermanagementdialog.h
 
 FORMS += \
@@ -125,6 +147,5 @@ FORMS += \
     peredatchikform.ui \
     modulatorform.ui \
     energoform.ui \
-    screenconfigdialog.ui \
     stubtab.ui \
     switchtab.ui

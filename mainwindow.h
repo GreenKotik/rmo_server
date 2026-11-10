@@ -28,11 +28,83 @@
 #include <QPushButton>
 #include <QPainter>
 #include <QPixmap>
+#include <QTabBar>
+#include <QStackedWidget>
+#include <QProxyStyle>
+#include <QTabBar>
+#include <QStyleOptionTab>
+#include <QPainter>
+#include <QSet>
+#include <QDateTime>
 
-struct ScreenConfig {
+// ============================================================================
+// ✅ 1. Сначала DocGroup — от него зависят ScreenConfig.
+// ============================================================================
+struct DocGroup {
+    QString name;
     int columns = 2;
     QStringList docPaths;
 };
+
+// ============================================================================
+// ✅ Конфигурация экрана: список групп + глобальные параметры.
+// ============================================================================
+struct ScreenConfig {
+    int columns = 2;            // fallback (не используется, если у всех групп заданы свои)
+    QList<DocGroup> groups;     // список групп
+};
+
+
+// ============================================================================
+// ✅ QTabBar с поддержкой «аварийных» вкладок (мигающий красный фон).
+// ============================================================================
+class AlarmTabBar : public QTabBar
+{
+    Q_OBJECT
+public:
+    using QTabBar::QTabBar;
+
+    void setCriticalGroups(const QSet<int> &groups) {
+        m_criticalGroups = groups;
+        update();
+    }
+
+    void setBlinkState(bool on) {
+        if (m_blinkState != on) {
+            m_blinkState = on;
+            update();
+        }
+    }
+
+    bool isBlinkOn() const { return m_blinkState; }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QTabBar::paintEvent(event);
+
+        if (!m_blinkState || m_criticalGroups.isEmpty()) return;
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+
+        for (int idx : m_criticalGroups) {
+            if (idx < 0 || idx >= count()) continue;
+            QRect r = tabRect(idx);
+            if (!r.isValid()) continue;
+
+            painter.setBrush(QColor(211, 47, 47, 100));
+            painter.setPen(QPen(QColor(211, 47, 47), 2));
+            painter.drawRoundedRect(r.adjusted(1, 1, -1, -1), 3, 3);
+        }
+    }
+
+private:
+    QSet<int> m_criticalGroups;
+    bool m_blinkState = false;
+};
+
+
 
 class CustomTitleBar : public QWidget
 {
@@ -167,12 +239,21 @@ private:
 };
 
 class FixedSubWindow : public QMdiSubWindow {
+    Q_OBJECT        // ✅ ДОБАВИТЬ
 public:
-    explicit FixedSubWindow(QWidget *widget = nullptr, QWidget *parent = nullptr) : QMdiSubWindow(parent) {
+    explicit FixedSubWindow(QWidget *widget = nullptr, QWidget *parent = nullptr)
+        : QMdiSubWindow(parent)
+    {
         setWidget(widget);
         setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         setWindowFlags(Qt::FramelessWindowHint | Qt::MSWindowsFixedSizeDialogHint);
     }
+
+    int groupId() const { return m_groupId; }
+    void setGroupId(int id) { m_groupId = id; }
+
+private:
+    int m_groupId = -1;
 };
 
 class MainWindow : public QMainWindow {
@@ -184,10 +265,11 @@ public:
     QList<QPair<QString, int>> getEquipmentListForRow(DocType type, int rowIndex);
     int getEquipmentRowCount(DocType type);
     QStringList getEquipmentConnectionNames(DocType type);
-    QString getCurrentUser() const { return authComboBox->currentText(); }
+    QString getCurrentUser() const;
     void forceAuthenticate(const QString &username);
     // ✅ НОВОЕ: Получить текущий активный документ
     BaseDocWidget* getCurrentDocument() const;
+    QStringList getDocPaths() const;
 
 private slots:
     void newAntenna();
@@ -216,8 +298,10 @@ private slots:
     void showServerClientConfig();
     void updateWindowTitle();
     void showDatabaseConfig();
-    // ✅ НОВОЕ: Открытие диалога просмотра данных
     void onViewDataAction();
+    void showUserActionLog();
+    void onShiftComboBoxChanged(int index);
+    void showDriverConfigEditor();
 
 private:
     void setupActions();
@@ -226,42 +310,85 @@ private:
     void saveConfig();
     QString getAppDir() const;
     QString getConfigPath() const;
-    void addDocumentPath(const QString &path);
+    void addDocumentPath(const QString &path, int groupId);
     void removeDocumentPath(const QString &path);
     QString getActiveDocumentPath();
     void initializeDocumentFile(const QString &filePath, DocType type);
     QString docTypeToString(DocType type);
     QList<EquipmentConnection> getEquipmentConnections(const QString &filePath);
     void saveEquipmentConnections(const QString &filePath, const QList<EquipmentConnection> &connections);
-    BaseDocWidget* createDocumentFromFile(const QString &path = QString(), DocType type = DocType::Antenna, bool addToConfig = true);
-    void applyGridLayout();
+    BaseDocWidget* createDocumentFromFile(const QString &path = QString(),
+                                          DocType type = DocType::Antenna,
+                                          int groupId = -1,
+                                          bool addToConfig = true);
+    void applyGridLayout(int groupId);
+    void applyGridLayoutAll();   // удобный обход всех групп
     BaseDocWidget* findWidgetByPath(const QString &path) const;
     void openDocumentFromConfig(const QString &path, DocType type, quint16 docPort);
     void loadAppConfig();
-    void updateAlarmPanelForDoc(const QString &docPath, const QList<int> &codes, const QList<int> &statuses);
+    void updateAlarmPanelForDoc(const QString &docPath,
+                                const QList<int> &codes,
+                                const QList<int> &statuses,
+                                const QDateTime &cycleTime);
     void removeAlarmPanelForDoc(const QString &docPath);
     void broadcastConfigToClients();
+    void moveDocumentToGroup(const QString &docPath, int newGroupId);
+    void applyScreenConfig(const QList<DocGroup> &newGroups);
+    void updateGroupTabsVisibility();
+    // Критические аварии по документам (для подсчёта по группам).
+    QMap<QString, int> m_docCriticalCount;
+    // Пересчитать m_groupCriticalCount[groupId] по документам группы.
+    void recalcGroupCriticalCount(int groupId);
+    // Применить прокси-стиль для мигающих вкладок.
+    void installTabBarStyle();
 
-    QPointer<QMdiArea> mdiArea;
-    QMenu *fileMenu;
-    QMenu *windowMenu;
-    QToolBar *mainToolBar;
-    QAction *saveAct;
-    QAction *saveAsAct;
-    QAction *closeAct;
-    QAction *newAntAct;
-    QAction *newTxAct;
-    QAction *newModAct;
-    QAction *newEnrAct;
-    QAction *openAct;
-    QAction *configAct;
-    QAction *userConfigAct;
-    QAction *changePasswordAct;
-    QAction *equipmentSettingsAct;
-    QAction *equipmentConfigAct;
-    QAction *serverClientConfigAct;
+    // ============================================================================
+    // ✅ Группы документов (вкладки)
+    // ============================================================================
+
+    // Вкладки групп сверху
+    AlarmTabBar *m_groupTabs = nullptr;
+    // Стек страниц: каждая страница — QMdiArea своей группы
+    QStackedWidget *m_groupStack = nullptr;
+
+    // QMdiArea по группам (индекс = индекс группы в config.groups)
+    QList<QMdiArea*> m_groupAreas;
+
+    // Количество критических аварий по каждой группе (для окраски вкладок)
+    QList<int> m_groupCriticalCount;
+
+    // Таймер мигания «аварийных» вкладок
+    QTimer *m_tabBlinkTimer = nullptr;
+    // Активная QMdiArea (текущей группы)
+    QMdiArea* activeArea() const;
+    // Найти группу по пути документа (-1, если не найдено)
+    int findGroupIdByDocPath(const QString &path) const;
+    // Обновить цвет/мигание вкладки группы
+    void updateTabAppearance(int groupId);
+    void onTabBlinkTimeout();
+
+
+
+    QMenu *fileMenu = nullptr;
+    QMenu *windowMenu = nullptr;
+    QToolBar *mainToolBar = nullptr;
+    QAction *saveAct = nullptr;
+    QAction *saveAsAct = nullptr;
+    QAction *closeAct = nullptr;
+    QAction *newAntAct = nullptr;
+    QAction *newTxAct = nullptr;
+    QAction *newModAct = nullptr;
+    QAction *newEnrAct = nullptr;
+    QAction *openAct = nullptr;
+    QAction *configAct = nullptr;
+    QAction *userConfigAct = nullptr;
+    QAction *changePasswordAct = nullptr;
+    QAction *equipmentSettingsAct = nullptr;
+    QAction *equipmentConfigAct = nullptr;
+    QAction *serverClientConfigAct = nullptr;
     QString m_programName;
-    QAction *databaseConfigAct;
+    QAction *databaseConfigAct = nullptr;
+    QAction *viewDataAct = nullptr;   // ✅ НОВЫЙ: Просмотр графика
 
     struct DatabaseConfig {
         QString host = "localhost";
@@ -283,6 +410,26 @@ private:
     NetworkController *m_net;
     AppMode m_mode;
     QMap<QString, QWidget*> m_alarmPanels;
+    QComboBox *shiftComboBox = nullptr;
+    QLabel *shiftLabel = nullptr;
+
+    // ✅ Пользователь, принявший смену (физически за пультом).
+    //    Требует пароля при выборе. Даёт базовые права оператора.
+    QString m_shiftUser;
+
+    // ✅ Полностью авторизованный пользователь (ввёл пароль).
+    //    Приоритетнее m_shiftUser.
+    QString m_authUser;
+
+    // ✅ Действующее имя для журнала.
+    //    auth → shift → «Аноним» (пустая строка).
+    QString effectiveUserName() const {
+        if (!m_authUser.isEmpty())  return m_authUser;
+        if (!m_shiftUser.isEmpty()) return m_shiftUser;
+        return QString();   // → DatabaseManager подставит «Аноним»
+    }
+    // ✅ Действующая роль.
+    QString effectiveUserRole() const;
 };
 
 #endif // MAINWINDOW_H

@@ -43,6 +43,14 @@ public:
 
     // ✅ Получить последнюю ошибку
     QString lastError() const { return m_lastError; }
+    // ✅ SNMP GET с несколькими OID в одном запросе (multiple Variable Bindings).
+    // Один UDP-пакет вместо N — критично для опроса 20+ OID за цикл.
+    // results: oid → QVariant (только успешно полученные).
+    // Возвращает false только при полном провале (таймаут, битый ответ).
+    // Отдельные OID с ошибкой в varBind попадут в results как QVariant().
+    bool getMulti(const QString &ip, int port, const QString &community,
+                  const QStringList &oids, QMap<QString, QVariant> &results,
+                  int timeoutMs = 2000);
 
 private:
     // ✅ ASN.1/BER константы
@@ -89,6 +97,9 @@ private:
     // ✅ Вспомогательные методы
     bool sendAndWait(const QString &ip, int port, const QByteArray &packet,
                      QByteArray &response, int timeoutMs);
+    bool parseSnmpMultiResponse(const QByteArray &response,
+                                QMap<QString, QVariant> &results,
+                                int &errorStatus);
 
     // ✅ ПОТОКОБЕЗОПАСНЫЕ поля (защищены m_mutex)
     int m_requestId;

@@ -1,5 +1,6 @@
 #include "modulatorwidget.h"
 #include "ui_modulatorform.h"
+#include "databasemanager.h"  // ✅ Для записи в БД
 #include "modulatorcontroldialog.h"
 #include "equipmentsettingsdialog.h"  // ✅ ДОБАВИТЬ
 #include "mainwindow.h"
@@ -87,7 +88,18 @@ void ModulatorWidget::saveToFile()
 
 void ModulatorWidget::processDocClientData(const QJsonObject &data)
 {
-    Q_UNUSED(data);
+    if (data.value("action").toString() == "KanalModulatorDataUpdate") {
+        const QJsonObject payload = data.value("data").toObject();
+        const bool writeToDb = payload.value("write_to_db").toBool(false);
+
+        if (writeToDb && !m_filePath.isEmpty()) {
+            const bool ok = DatabaseManager::instance().logDocumentData(
+                m_filePath, 4, payload);
+            if (!ok) {
+                qWarning() << "[ModulatorWidget/CLIENT] ❌ Не удалось записать в БД";
+            }
+        }
+    }
 }
 
 QJsonObject ModulatorWidget::getDocumentParameters() const
@@ -113,109 +125,218 @@ void ModulatorWidget::onApplyClicked()
 }
 
 // ============================================================================
-// ✅ ОБРАБОТКА РЕЗУЛЬТАТОВ ОПРОСА
+// Перехват данных от драйвера (модулятор)
 // ============================================================================
-void ModulatorWidget::processPollResult(int chainId, int deviceIndex, std::shared_ptr<IDeviceData> data)
+void ModulatorWidget::processPollResult(int chainId, int deviceIndex,
+                                        std::shared_ptr<IDeviceData> data)
 {
-    // 1. Сначала вызываем базовый метод (для индикатора заголовка, аварий и т.д.)
+    // 1. Сначала вызываем базовый метод
     BaseDocWidget::processPollResult(chainId, deviceIndex, data);
-
-    // 2. Проверяем, являются ли данные данными модулятора
-    auto modData = std::dynamic_pointer_cast<ModulatorData>(data);
-    if (modData) {
-        updateUIFromModulatorData(modData);
-    }
-}
-
-// ============================================================================
-// ✅ ОБНОВЛЕНИЕ UI ИЗ ДАННЫХ МОДУЛЯТОРА
-// ============================================================================
-void ModulatorWidget::updateUIFromModulatorData(const std::shared_ptr<ModulatorData> &data)
-{
     if (!data) return;
 
-    // === Монитор 1 ===
-    ui->label->setText(QString::number(data->usefulBitRate1, 'f', 3));
-    ui->label_2->setText(QString::number(data->totalBitRate1, 'f', 3));
-    ui->label_5->setText(QString::number(data->outputLevel1, 'f', 1));
-
-    if (data->asiSyncLost1) {
-        ui->LedInd_ASI_1->setState(LedIndicator::State::Red);
-        ui->labelASI_3->setText("ASI 1 TS Sync LOST");
-        ui->labelASI_3->setStyleSheet("color: red; font-weight: bold;");
-    } else {
-        ui->LedInd_ASI_1->setState(LedIndicator::State::Green);
-        ui->labelASI_3->setText("ASI 1 TS Sync OK");
-        ui->labelASI_3->setStyleSheet("color: green;");
-    }
-
-    ui->LedInd_RF_Output_1->setState(data->rfOutputOk1 ? LedIndicator::State::Green : LedIndicator::State::Red);
-
-    // === Монитор 2 ===
-    ui->label_7->setText(QString::number(data->usefulBitRate2, 'f', 3));
-    ui->label_11->setText(QString::number(data->totalBitRate2, 'f', 3));
-    ui->label_10->setText(QString::number(data->outputLevel2, 'f', 1));
-
-    if (data->asiSyncLost2) {
-        ui->LedInd_ASI_2->setState(LedIndicator::State::Red);
-        ui->labelASI_4->setText("ASI 2 TS Sync LOST");
-        ui->labelASI_4->setStyleSheet("color: red; font-weight: bold;");
-    } else {
-        ui->LedInd_ASI_2->setState(LedIndicator::State::Green);
-        ui->labelASI_4->setText("ASI 2 TS Sync OK");
-        ui->labelASI_4->setStyleSheet("color: green;");
-    }
-
-    ui->LedInd_RF_Output_2->setState(data->rfOutputOk2 ? LedIndicator::State::Green : LedIndicator::State::Red);
-
-    // === SW секция: Режим ===
-    ui->LedInd_Remote->setState(LedIndicator::State::Gray);
-    ui->LedInd_Local->setState(LedIndicator::State::Gray);
-    ui->LedInd_Auto->setState(LedIndicator::State::Gray);
-
-    switch (data->swMode) {
-        case ModulatorData::SwMode::Remote:
-            ui->LedInd_Remote->setState(LedIndicator::State::Green);
+    // 2. Находим слот по deviceId
+    const int devId = data->deviceId();
+    int slotIndex = -1;
+    const auto connections = getEquipmentConnections();
+    for (int i = 0; i < connections.size(); ++i) {
+        if (connections[i].deviceId == devId) {
+            slotIndex = i;
             break;
-        case ModulatorData::SwMode::Local:
-            ui->LedInd_Local->setState(LedIndicator::State::Green);
-            break;
-        case ModulatorData::SwMode::Auto:
-            ui->LedInd_Auto->setState(LedIndicator::State::Green);
-            break;
-        default:
-            break;
-    }
-
-    // === Активный модулятор и питание ===
-    if (data->activeModulator == 1) {
-        ui->label_20->setText("Modulator 1");
-        ui->label_20->setStyleSheet("color: green; font-weight: bold;");
-        ui->ModSwitch->setState(RingIndicator::State::Green);
-    } else if (data->activeModulator == 2) {
-        ui->label_20->setText("Modulator 2");
-        ui->label_20->setStyleSheet("color: #FFC107; font-weight: bold;"); // Желтый/Янтарный
-        ui->ModSwitch->setState(RingIndicator::State::Yellow);
-    } else {
-        ui->label_20->setText("Modulator ?");
-        ui->label_20->setStyleSheet("color: gray;");
-        ui->ModSwitch->setState(RingIndicator::State::Gray);
-    }
-
-    ui->LedInd_Power_1->setState(data->power1On ? LedIndicator::State::Green : LedIndicator::State::Gray);
-    ui->LedInd_Power_2->setState(data->power2On ? LedIndicator::State::Green : LedIndicator::State::Gray);
-
-    // === Авария (Fault) ===
-    if (data->swFault || data->hasErrors()) {
-        ui->LedInd_Fault->setState(LedIndicator::State::Red);
-        // Если есть общая авария, кольцевой индикатор тоже становится красным
-        if (data->activeModulator != 0) {
-            ui->ModSwitch->setState(RingIndicator::State::Red);
         }
-    } else {
-        ui->LedInd_Fault->setState(LedIndicator::State::Gray);
+    }
+    if (slotIndex < 0) return;
+
+    const DeviceErrors devErrors = data->getErrors();
+
+    // 3. Данные от модулятора (ModulatorData)
+    // В документе "Модулятор" ожидаются слоты:
+    //   0 - Усилитель-распределитель (заглушка)
+    //   1 - Модулятор 1 (ModulatorData)
+    //   2 - Модулятор 2 (ModulatorData)
+    //   3 - Переключатель резервирования (DevSwData — пока заглушка)
+    //   4 - Анализатор потока (заглушка)
+    if (auto modData = std::dynamic_pointer_cast<ModulatorData>(data)) {
+        m_dataBuffer.update([modData, devErrors, slotIndex](KanalModulatorData &kData) {
+            if (slotIndex == 1) {
+                // Модулятор 1
+                kData.mod1_serianumber = modData->serianumber;
+                kData.mod1_productType = modData->productType;
+                kData.mod1_productName = modData->productName;
+                kData.mod1_temperature = modData->temperature;
+
+                kData.mod1_alarmInputAsi1TsSynchroStatus = modData->alarmInputAsi1TsSynchroStatus;
+                kData.mod1_alarmInputTSoIp1TsSynchroStatus = modData->alarmInputTSoIp1TsSynchroStatus;
+                kData.mod1_alarmInputActiveInFifoOverflowStatus = modData->alarmInputActiveInFifoOverflowStatus;
+
+                kData.mod1_configProcessBaudrate = modData->configProcessBaudrate;
+
+                kData.mod1_monitorInputAsi1TsSynchro = modData->monitorInputAsi1TsSynchro;
+                kData.mod1_monitorInputAsi1UserfulBitrate = modData->monitorInputAsi1UserfulBitrate;
+                kData.mod1_monitorInputAsi1TotalBitrate = modData->monitorInputAsi1TotalBitrate;
+                kData.mod1_monitorInputTSoIp1TsSynchro = modData->monitorInputTSoIp1TsSynchro;
+                kData.mod1_monitorInputTSoIp1UserfulBitrate = modData->monitorInputTSoIp1UserfulBitrate;
+                kData.mod1_monitorInputTSoIp1TotalBitrate = modData->monitorInputTSoIp1TotalBitrate;
+
+                kData.mod1_monitorInputActiveAsi1TsSynchro = modData->monitorInputActiveAsi1TsSynchro;
+                kData.mod1_monitorInputActiveAsi1UserfulBitrate = modData->monitorInputActiveAsi1UserfulBitrate;
+                kData.mod1_monitorInputActiveAsi1TotalBitrate = modData->monitorInputActiveAsi1TotalBitrate;
+                kData.mod1_monitorInputActiveTSoIp1UserfulBitrate = modData->monitorInputActiveTSoIp1UserfulBitrate;
+                kData.mod1_monitorInputActiveTSoIp1TotalBitrate = modData->monitorInputActiveTSoIp1TotalBitrate;
+                kData.mod1_monitorInputActiveTSoIp1TsSynchro = modData->monitorInputActiveTSoIp1TsSynchro;
+
+                kData.mod1_monitorProcessOutputSignalBandwidth = modData->monitorProcessOutputSignalBandwidth;
+                kData.mod1_monitorProcessOutputChannelBitrate = modData->monitorProcessOutputChannelBitrate;
+
+                kData.mod1_outputRfIfBandPowerLevel = modData->outputRfIfBandPowerLevel;
+                kData.mod1_outputRfLbBandPowerLevel = modData->outputRfLbBandPowerLevel;
+                kData.mod1_outputConfigRfLbBandCarrierFrequency = modData->outputConfigRfLbBandCarrierFrequency;
+                kData.mod1_outputConfigRfIfBandCarrierFrequency = modData->outputConfigRfIfBandCarrierFrequency;
+                kData.mod1_outputConfigRfMute = modData->outputConfigRfMute;
+                kData.mod1_outputConfigRfUnmute = modData->outputConfigRfUnmute;
+                kData.mod1_outputConfigRfMuteAtStartup = modData->outputConfigRfMuteAtStartup;
+                kData.mod1_outputConfigRfCarrierModulated = modData->outputConfigRfCarrierModulated;
+                kData.mod1_outputConfigRfCustomRolloffValue = modData->outputConfigRfCustomRolloffValue;
+
+                kData.mod1_monitorIp1EthernetLock = modData->monitorIp1EthernetLock;
+                kData.mod1_monitorIp1MpegTsBitrate = modData->monitorIp1MpegTsBitrate;
+
+                kData.mod1_monitorRelayWarnInState = modData->monitorRelayWarnInState;
+                kData.mod1_monitorRelayCritState = modData->monitorRelayCritState;
+
+                kData.mod1_monitorRedundancyStatusGpioRelay2 = modData->monitorRedundancyStatusGpioRelay2;
+                kData.mod1_monitorRedundancyStatusGpioRelay3 = modData->monitorRedundancyStatusGpioRelay3;
+
+                kData.mod1_monitorTimeCurrentUtc = modData->monitorTimeCurrentUtc;
+
+                kData.mod1_monitorPowerSupply1Status = modData->monitorPowerSupply1Status;
+                kData.mod1_monitorPowerSupply2Status = modData->monitorPowerSupply2Status;
+
+                kData.mod1_monitorFan1Speed = modData->monitorFan1Speed;
+                kData.mod1_monitorFan2Speed = modData->monitorFan2Speed;
+                kData.mod1_monitorFan3Speed = modData->monitorFan3Speed;
+                kData.mod1_monitorFan4Speed = modData->monitorFan4Speed;
+                kData.mod1_monitorFan5Speed = modData->monitorFan5Speed;
+
+                kData.errorsMod1 = devErrors;
+            }
+            else if (slotIndex == 2) {
+                // Модулятор 2
+                kData.mod2_serianumber = modData->serianumber;
+                kData.mod2_productType = modData->productType;
+                kData.mod2_productName = modData->productName;
+                kData.mod2_temperature = modData->temperature;
+
+                kData.mod2_alarmInputAsi1TsSynchroStatus = modData->alarmInputAsi1TsSynchroStatus;
+                kData.mod2_alarmInputTSoIp1TsSynchroStatus = modData->alarmInputTSoIp1TsSynchroStatus;
+                kData.mod2_alarmInputActiveInFifoOverflowStatus = modData->alarmInputActiveInFifoOverflowStatus;
+
+                kData.mod2_configProcessBaudrate = modData->configProcessBaudrate;
+
+                kData.mod2_monitorInputAsi1TsSynchro = modData->monitorInputAsi1TsSynchro;
+                kData.mod2_monitorInputAsi1UserfulBitrate = modData->monitorInputAsi1UserfulBitrate;
+                kData.mod2_monitorInputAsi1TotalBitrate = modData->monitorInputAsi1TotalBitrate;
+                kData.mod2_monitorInputTSoIp1TsSynchro = modData->monitorInputTSoIp1TsSynchro;
+                kData.mod2_monitorInputTSoIp1UserfulBitrate = modData->monitorInputTSoIp1UserfulBitrate;
+                kData.mod2_monitorInputTSoIp1TotalBitrate = modData->monitorInputTSoIp1TotalBitrate;
+
+                kData.mod2_monitorInputActiveAsi1TsSynchro = modData->monitorInputActiveAsi1TsSynchro;
+                kData.mod2_monitorInputActiveAsi1UserfulBitrate = modData->monitorInputActiveAsi1UserfulBitrate;
+                kData.mod2_monitorInputActiveAsi1TotalBitrate = modData->monitorInputActiveAsi1TotalBitrate;
+                kData.mod2_monitorInputActiveTSoIp1UserfulBitrate = modData->monitorInputActiveTSoIp1UserfulBitrate;
+                kData.mod2_monitorInputActiveTSoIp1TotalBitrate = modData->monitorInputActiveTSoIp1TotalBitrate;
+                kData.mod2_monitorInputActiveTSoIp1TsSynchro = modData->monitorInputActiveTSoIp1TsSynchro;
+
+                kData.mod2_monitorProcessOutputSignalBandwidth = modData->monitorProcessOutputSignalBandwidth;
+                kData.mod2_monitorProcessOutputChannelBitrate = modData->monitorProcessOutputChannelBitrate;
+
+                kData.mod2_outputRfIfBandPowerLevel = modData->outputRfIfBandPowerLevel;
+                kData.mod2_outputRfLbBandPowerLevel = modData->outputRfLbBandPowerLevel;
+                kData.mod2_outputConfigRfLbBandCarrierFrequency = modData->outputConfigRfLbBandCarrierFrequency;
+                kData.mod2_outputConfigRfIfBandCarrierFrequency = modData->outputConfigRfIfBandCarrierFrequency;
+                kData.mod2_outputConfigRfMute = modData->outputConfigRfMute;
+                kData.mod2_outputConfigRfUnmute = modData->outputConfigRfUnmute;
+                kData.mod2_outputConfigRfMuteAtStartup = modData->outputConfigRfMuteAtStartup;
+                kData.mod2_outputConfigRfCarrierModulated = modData->outputConfigRfCarrierModulated;
+                kData.mod2_outputConfigRfCustomRolloffValue = modData->outputConfigRfCustomRolloffValue;
+
+                kData.mod2_monitorIp1EthernetLock = modData->monitorIp1EthernetLock;
+                kData.mod2_monitorIp1MpegTsBitrate = modData->monitorIp1MpegTsBitrate;
+
+                kData.mod2_monitorRelayWarnInState = modData->monitorRelayWarnInState;
+                kData.mod2_monitorRelayCritState = modData->monitorRelayCritState;
+
+                kData.mod2_monitorRedundancyStatusGpioRelay2 = modData->monitorRedundancyStatusGpioRelay2;
+                kData.mod2_monitorRedundancyStatusGpioRelay3 = modData->monitorRedundancyStatusGpioRelay3;
+
+                kData.mod2_monitorTimeCurrentUtc = modData->monitorTimeCurrentUtc;
+
+                kData.mod2_monitorPowerSupply1Status = modData->monitorPowerSupply1Status;
+                kData.mod2_monitorPowerSupply2Status = modData->monitorPowerSupply2Status;
+
+                kData.mod2_monitorFan1Speed = modData->monitorFan1Speed;
+                kData.mod2_monitorFan2Speed = modData->monitorFan2Speed;
+                kData.mod2_monitorFan3Speed = modData->monitorFan3Speed;
+                kData.mod2_monitorFan4Speed = modData->monitorFan4Speed;
+                kData.mod2_monitorFan5Speed = modData->monitorFan5Speed;
+
+                kData.errorsMod2 = devErrors;
+            }
+        });
     }
 }
+
+
+// ============================================================================
+// ✅ ЭТАП 3: Цепочка обработки (UI + БД + Клиенты)
+// ============================================================================
+void ModulatorWidget::updateUIFromBuffer()
+{
+    KanalModulatorData currentData = m_dataBuffer.getLatest();
+
+    // ✅ Время из Time Pool-цепочки (фиксируется в рабочем потоке).
+    currentData.timestamp = lastCycleTime();
+
+    // --- А. Обновление UI ---
+    // ✅ Output Level для модулятора 1 (LB band) → label_5
+    ui->label_5->setText(QString::number(currentData.mod1_outputRfLbBandPowerLevel, 'f', 2));
+
+    // Позже перепишем updateUIFromModulatorData под новые поля.
+    qDebug() << "[ModulatorWidget] updateUIFromBuffer:"
+             << "mod1_productName=" << currentData.mod1_productName
+             << "mod1_temperature=" << currentData.mod1_temperature
+             << "mod2_productName=" << currentData.mod2_productName
+             << "mod2_temperature=" << currentData.mod2_temperature;
+
+    // --- Б. Агрегация ошибок по всем устройствам ---
+    currentData.ErrorsAll = buildErrorsAllString();
+
+    // --- В. Определяем, пора ли писать в БД ---
+    currentData.writeToDb = shouldWriteToDb(currentData.ErrorsAll);
+
+    // --- Г. Запись в БД (только по флагу) ---
+    if (currentData.writeToDb) {
+        if (!m_filePath.isEmpty()) {
+            const bool ok = DatabaseManager::instance().logDocumentData(
+                m_filePath, 4, currentData.toJsonObject());
+            if (!ok) {
+                qWarning() << "[ModulatorWidget] ❌ Не удалось записать данные в БД";
+            }
+        } else {
+            qWarning() << "[ModulatorWidget] ⚠️ m_filePath пуст, запись в БД пропущена";
+        }
+    }
+
+    // --- Г. Рассылка клиентам (один раз за цикл) ---
+    QJsonObject networkPayload;
+    networkPayload["action"] = "KanalModulatorDataUpdate";
+    networkPayload["data"] = currentData.toJsonObject();
+    broadcastDocUpdate(networkPayload);
+
+    // --- Д. ФИНАЛИЗАЦИЯ ЦИКЛА ---
+    finalizePollCycle();
+}
+
+
 
 
 // ============================================================================
@@ -286,24 +407,30 @@ void ModulatorWidget::contextMenuEvent(QContextMenuEvent *event)
         "}"
     );
 
-    // Пункт 1: Настройка параметров (из базового класса)
+    // ✅ НОВЫЙ пункт: Просмотр графика (тот же, что в BaseDocWidget)
+    QAction *graphAct = menu.addAction("📊 Просмотр графика");
+
+    // Пункт: Настройка параметров
     QAction *settingsAct = menu.addAction("⚙️ Настройка параметров");
 
-    menu.addSeparator();
-
-    // ✅ НОВЫЙ пункт: Расширенное управление
+    // ✅ Пункт: Расширенное управление (только для модулятора)
     QAction *controlAct = menu.addAction("🎛️ Расширенное управление...");
 
     // Показываем меню в позиции клика
     QAction *selected = menu.exec(event->globalPos());
 
     // Обработка выбора
-    if (selected == settingsAct) {
+    if (selected == graphAct) {
+        // ✅ Используем protected-слот базового класса
+        onViewDataGraph();
+    }
+    else if (selected == settingsAct) {
         EquipmentSettingsDialog dlg(mainWin);
         dlg.setDocumentFilePath(m_filePath);
         dlg.setCurrentUser(mainWin->getCurrentUser());
         dlg.exec();
-    } else if (selected == controlAct) {
+    }
+    else if (selected == controlAct) {
         openControlDialog();
     }
 }
@@ -314,4 +441,14 @@ void ModulatorWidget::contextMenuEvent(QContextMenuEvent *event)
 void ModulatorWidget::onOpenControlDialog()
 {
     openControlDialog();
+}
+
+// ============================================================================
+// ✅ Хук после загрузки файла — загрузить конфигурацию (если есть)
+// ============================================================================
+void ModulatorWidget::onFileLoaded()
+{
+    qDebug() << "[ModulatorWidget] onFileLoaded для:" << m_filePath;
+    // Специфичных настроек для модулятора пока нет.
+    // Метод оставлен для единообразия с другими виджетами.
 }

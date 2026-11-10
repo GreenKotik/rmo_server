@@ -3,152 +3,79 @@
 <class>ModulatorTabForm</class>
 <widget class="QWidget" name="ModulatorTabForm">
 <property name="geometry">
-<rect>
-<x>0</x>
-<y>0</y>
-<width>560</width>
-<height>320</height>
-</rect>
+<rect><x>0</x><y>0</y><width>640</width><height>520</height></rect>
 </property>
-<property name="windowTitle">
-<string>Модулятор</string>
-</property>
+<property name="windowTitle"><string>Модулятор</string></property>
 <layout class="QVBoxLayout" name="mainLayout">
-<property name="spacing">
-<number>10</number>
-</property>
-<property name="leftMargin">
-<number>12</number>
-</property>
-<property name="topMargin">
-<number>12</number>
-</property>
-<property name="rightMargin">
-<number>12</number>
-</property>
-<property name="bottomMargin">
-<number>12</number>
-</property>
+<property name="spacing"><number>10</number></property>
+<property name="leftMargin"><number>12</number></property>
+<property name="topMargin"><number>12</number></property>
+<property name="rightMargin"><number>12</number></property>
+<property name="bottomMargin"><number>12</number></property>
+
 <item>
 <widget class="QLabel" name="labelTitle">
-<property name="font">
-<font>
-<pointsize>14</pointsize>
-<weight>75</weight>
-<bold>true</bold>
-</font>
-</property>
-<property name="styleSheet">
-<string notr="true">color: #005A9E;</string>
-</property>
-<property name="text">
-<string>Модулятор</string>
-</property>
+<property name="font"><font><pointsize>14</pointsize><weight>75</weight><bold>true</bold></font></property>
+<property name="styleSheet"><string notr="true">color: #005A9E;</string></property>
+<property name="text"><string>Модулятор</string></property>
 </widget>
 </item>
+
 <item>
 <widget class="QGroupBox" name="groupBoxStatus">
-<property name="title">
-<string>Состояние</string>
-</property>
+<property name="title"><string>Состояние</string></property>
 <layout class="QVBoxLayout" name="verticalLayoutStatus">
 <item>
 <widget class="QLabel" name="labelStatus">
-<property name="text">
-<string>Статус: --</string>
-</property>
+<property name="text"><string>Статус: --</string></property>
 </widget>
 </item>
 <item>
-<widget class="QLabel" name="labelPower">
-<property name="text">
-<string>Питание: --</string>
-</property>
-</widget>
-</item>
-<item>
-<widget class="QLabel" name="labelFrequency">
-<property name="text">
-<string>Частота: -- MHz</string>
-</property>
+<widget class="QTableWidget" name="tableValues">
+<property name="editTriggers"><set>QAbstractItemView::NoEditTriggers</set></property>
+<property name="selectionBehavior"><enum>QAbstractItemView::SelectRows</enum></property>
+<property name="alternatingRowColors"><bool>true</bool></property>
+<property name="sortingEnabled"><bool>false</bool></property>
+<column><property name="text"><string>Параметр</string></property></column>
+<column><property name="text"><string>Значение</string></property></column>
 </widget>
 </item>
 </layout>
 </widget>
 </item>
-<item>
-<spacer name="verticalSpacer">
-<property name="orientation">
-<enum>Qt::Vertical</enum>
-</property>
-<property name="sizeHint" stdset="0">
-<size>
-<width>20</width>
-<height>40</height>
-</size>
-</property>
-</spacer>
-</item>
+
 <item>
 <widget class="QGroupBox" name="groupBoxCommands">
-<property name="title">
-<string>Команды управления</string>
-</property>
+<property name="title"><string>Команды управления</string></property>
 <layout class="QHBoxLayout" name="horizontalLayoutCommands">
 <item>
 <widget class="QPushButton" name="btnTurnOn">
-<property name="minimumSize">
-<size>
-<width>120</width>
-<height>32</height>
-</size>
-</property>
-<property name="styleSheet">
-<string notr="true">QPushButton { background-color: #2E7D32; color: white; padding: 8px 16px; border-radius: 4px; }
-QPushButton:hover { background-color: #1B5E20; }</string>
-</property>
-<property name="text">
-<string>Включить</string>
-</property>
+<property name="minimumSize"><size><width>120</width><height>32</height></size></property>
+<property name="styleSheet"><string notr="true">QPushButton { background-color: #2E7D32; color: white; padding: 8px 16px; border-radius: 4px; }
+QPushButton:hover { background-color: #1B5E20; }</string></property>
+<property name="text"><string>Включить</string></property>
 </widget>
 </item>
 <item>
 <widget class="QPushButton" name="btnTurnOff">
-<property name="minimumSize">
-<size>
-<width>120</width>
-<height>32</height>
-</size>
-</property>
-<property name="styleSheet">
-<string notr="true">QPushButton { background-color: #C62828; color: white; padding: 8px 16px; border-radius: 4px; }
-QPushButton:hover { background-color: #B71C1C; }</string>
-</property>
-<property name="text">
-<string>Выключить</string>
-</property>
+<property name="minimumSize"><size><width>120</width><height>32</height></size></property>
+<property name="styleSheet"><string notr="true">QPushButton { background-color: #C62828; color: white; padding: 8px 16px; border-radius: 4px; }
+QPushButton:hover { background-color: #B71C1C; }</string></property>
+<property name="text"><string>Выключить</string></property>
 </widget>
 </item>
 <item>
 <widget class="QPushButton" name="btnResetAlarms">
-<property name="minimumSize">
-<size>
-<width>140</width>
-<height>32</height>
-</size>
-</property>
-<property name="styleSheet">
-<string notr="true">QPushButton { background-color: #FF6F00; color: white; padding: 8px 16px; border-radius: 4px; }
-QPushButton:hover { background-color: #E65100; }</string>
-</property>
-<property name="text">
-<string>Сбросить аварии</string>
-</property>
+<property name="minimumSize"><size><width>140</width><height>32</height></size></property>
+<property name="styleSheet"><string notr="true">QPushButton { background-color: #FF6F00; color: white; padding: 8px 16px; border-radius: 4px; }
+QPushButton:hover { background-color: #E65100; }</string></property>
+<property name="text"><string>Сбросить аварии</string></property>
 </widget>
 </item>
 </layout>
 </widget>
 </item>
+
 </layout>
 </widget>
 <resources/>

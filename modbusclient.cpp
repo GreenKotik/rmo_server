@@ -2,6 +2,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <cstring>
+#include <QElapsedTimer>
 
 // ============================================================================
 // ✅ КОДЫ ФУНКЦИЙ MODBUS
@@ -42,7 +43,7 @@ ModbusClient::~ModbusClient()
 }
 
 // ============================================================================
-// ✅ ПОДКЛЮЧЕНИЕ TCP
+//  ПОДКЛЮЧЕНИЕ TCP
 // ============================================================================
 
 bool ModbusClient::connectTcp(const QString &ip, quint16 port, int timeoutMs)
@@ -66,7 +67,7 @@ bool ModbusClient::connectTcp(const QString &ip, quint16 port, int timeoutMs)
 }
 
 // ============================================================================
-// ✅ ПОДКЛЮЧЕНИЕ RTU (COM-ПОРТ)
+//  ПОДКЛЮЧЕНИЕ RTU (COM-ПОРТ)
 // ============================================================================
 
 bool ModbusClient::connectRtu(const QString &portName, int baudRate,
@@ -99,7 +100,7 @@ bool ModbusClient::connectRtu(const QString &portName, int baudRate,
 }
 
 // ============================================================================
-// ✅ ОТКЛЮЧЕНИЕ
+//  ОТКЛЮЧЕНИЕ
 // ============================================================================
 
 void ModbusClient::disconnect()
@@ -120,15 +121,12 @@ void ModbusClient::disconnect()
 
 bool ModbusClient::isConnected() const
 {
-    if (m_mode == Mode::TCP) {
-        return m_tcpSocket->state() == QAbstractSocket::ConnectedState;
-    } else {
-        return m_serialPort->isOpen();
-    }
+    return (m_tcpSocket->state() == QAbstractSocket::ConnectedState)
+        || m_serialPort->isOpen();
 }
 
 // ============================================================================
-// ✅ ФУНКЦИЯ 0x01: READ COILS
+//  ФУНКЦИЯ 0x01: READ COILS
 // ============================================================================
 
 bool ModbusClient::readCoils(quint8 slaveId, quint16 startAddr, quint16 quantity,
@@ -189,7 +187,7 @@ bool ModbusClient::readCoils(quint8 slaveId, quint16 startAddr, quint16 quantity
 }
 
 // ============================================================================
-// ✅ ФУНКЦИЯ 0x02: READ DISCRETE INPUTS
+//  ФУНКЦИЯ 0x02: READ DISCRETE INPUTS
 // ============================================================================
 
 bool ModbusClient::readDiscreteInputs(quint8 slaveId, quint16 startAddr, quint16 quantity,
@@ -245,7 +243,7 @@ bool ModbusClient::readDiscreteInputs(quint8 slaveId, quint16 startAddr, quint16
 }
 
 // ============================================================================
-// ✅ ФУНКЦИЯ 0x03: READ HOLDING REGISTERS
+//  ФУНКЦИЯ 0x03: READ HOLDING REGISTERS
 // ============================================================================
 
 bool ModbusClient::readHoldingRegisters(quint8 slaveId, quint16 startAddr, quint16 quantity,
@@ -301,7 +299,7 @@ bool ModbusClient::readHoldingRegisters(quint8 slaveId, quint16 startAddr, quint
 }
 
 // ============================================================================
-// ✅ ФУНКЦИЯ 0x04: READ INPUT REGISTERS
+//  ФУНКЦИЯ 0x04: READ INPUT REGISTERS
 // ============================================================================
 
 bool ModbusClient::readInputRegisters(quint8 slaveId, quint16 startAddr, quint16 quantity,
@@ -356,7 +354,7 @@ bool ModbusClient::readInputRegisters(quint8 slaveId, quint16 startAddr, quint16
 }
 
 // ============================================================================
-// ✅ ФУНКЦИЯ 0x05: WRITE SINGLE COIL
+//  ФУНКЦИЯ 0x05: WRITE SINGLE COIL
 // ============================================================================
 
 bool ModbusClient::writeSingleCoil(quint8 slaveId, quint16 addr, bool value, int timeoutMs)
@@ -403,7 +401,7 @@ bool ModbusClient::writeSingleCoil(quint8 slaveId, quint16 addr, bool value, int
 }
 
 // ============================================================================
-// ✅ ФУНКЦИЯ 0x06: WRITE SINGLE REGISTER
+//  ФУНКЦИЯ 0x06: WRITE SINGLE REGISTER
 // ============================================================================
 
 bool ModbusClient::writeSingleRegister(quint8 slaveId, quint16 addr, quint16 value, int timeoutMs)
@@ -450,7 +448,7 @@ bool ModbusClient::writeSingleRegister(quint8 slaveId, quint16 addr, quint16 val
 }
 
 // ============================================================================
-// ✅ ФУНКЦИЯ 0x0F: WRITE MULTIPLE COILS
+//  ФУНКЦИЯ 0x0F: WRITE MULTIPLE COILS
 // ============================================================================
 
 bool ModbusClient::writeMultipleCoils(quint8 slaveId, quint16 startAddr,
@@ -514,7 +512,7 @@ bool ModbusClient::writeMultipleCoils(quint8 slaveId, quint16 startAddr,
 }
 
 // ============================================================================
-// ✅ ФУНКЦИЯ 0x10: WRITE MULTIPLE REGISTERS
+//  ФУНКЦИЯ 0x10: WRITE MULTIPLE REGISTERS
 // ============================================================================
 
 bool ModbusClient::writeMultipleRegisters(quint8 slaveId, quint16 startAddr,
@@ -572,7 +570,7 @@ bool ModbusClient::writeMultipleRegisters(quint8 slaveId, quint16 startAddr,
 }
 
 // ============================================================================
-// ✅ ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
+//  ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
 // ============================================================================
 
 float ModbusClient::registersToFloat(quint16 high, quint16 low)
@@ -627,7 +625,7 @@ quint8 ModbusClient::calculateLRC(const QByteArray &data)
 }
 
 // ============================================================================
-// ✅ ВНУТРЕННИЕ МЕТОДЫ
+//  ВНУТРЕННИЕ МЕТОДЫ
 // ============================================================================
 
 QByteArray ModbusClient::createMBAPHeader(quint16 transactionId, quint16 length, quint8 unitId)
@@ -678,44 +676,34 @@ QByteArray ModbusClient::createASCIIFrame(quint8 slaveId, const QByteArray &pdu)
 bool ModbusClient::sendRequest(const QByteArray &request, QByteArray &response, int timeoutMs)
 {
     QMutexLocker locker(&m_mutex);
+    response.clear();
 
-    if (m_mode == Mode::TCP) {
-        // Очищаем буфер
+    // ✅ Выбор транспорта по факту: TCP-сокет или COM-порт
+    if (m_tcpSocket->state() == QAbstractSocket::ConnectedState) {
         m_tcpSocket->flush();
+        while (m_tcpSocket->bytesAvailable() > 0) m_tcpSocket->readAll();
 
-        // Отправляем запрос
         qint64 bytesWritten = m_tcpSocket->write(request);
         if (bytesWritten != request.size()) {
-            m_lastError = "Ошибка отправки запроса";
+            m_lastError = "Ошибка отправки запроса (TCP)";
             return false;
         }
-
-        // Ожидаем ответ
-        if (!waitForTcpData(timeoutMs)) {
-            return false;
-        }
-
-        // Читаем ответ
+        if (!waitForTcpData(timeoutMs)) return false;
         response = m_tcpSocket->readAll();
-
-    } else if (m_mode == Mode::RTU || m_mode == Mode::ASCII) {
-        // Очищаем буфер
+    } else if (m_serialPort->isOpen()) {
         m_serialPort->flush();
+        while (m_serialPort->bytesAvailable() > 0) m_serialPort->readAll();
 
-        // Отправляем запрос
         qint64 bytesWritten = m_serialPort->write(request);
         if (bytesWritten != request.size()) {
-            m_lastError = "Ошибка отправки запроса";
+            m_lastError = "Ошибка отправки запроса (COM)";
             return false;
         }
-
-        // Ожидаем ответ
-        if (!waitForSerialData(timeoutMs)) {
-            return false;
-        }
-
-        // Читаем ответ
+        if (!waitForSerialData(timeoutMs)) return false;
         response = m_serialPort->readAll();
+    } else {
+        m_lastError = "Нет ни TCP-соединения, ни COM-порта";
+        return false;
     }
 
     return true;
@@ -809,64 +797,92 @@ bool ModbusClient::parseResponse(const QByteArray &response, quint8 expectedFunc
         data = response.mid(3, byteCount);
 
     } else if (m_mode == Mode::ASCII) {
-        // Проверяем начало (':') и конец (CR LF)
+        // response = ':' + hex + '\r\n'
         if (response.size() < 5 || response[0] != ':') {
             m_lastError = "Неверный формат ASCII-ответа";
             return false;
         }
 
-        // Проверяем LRC
-        QByteArray frameWithoutLrc = response.mid(1, response.size() - 4);
-        quint8 receivedLrc = static_cast<quint8>(response[response.size() - 3]);
-        quint8 calculatedLrc = calculateLRC(frameWithoutLrc);
+        // Отрезать ':' и CRLF
+        QByteArray hexPart = response.mid(1);
+        while (!hexPart.isEmpty()
+               && (hexPart.endsWith('\r') || hexPart.endsWith('\n'))) {
+            hexPart.chop(1);
+        }
+        QByteArray binary = QByteArray::fromHex(hexPart);
+        if (binary.size() < 3) {
+            m_lastError = "Слишком короткий ASCII-ответ";
+            return false;
+        }
 
-        if (receivedLrc != calculatedLrc) {
+        // LRC — последний байт binary
+        QByteArray frameWithoutLrc = binary.left(binary.size() - 1);
+        quint8 receivedLrc = static_cast<quint8>(binary[binary.size() - 1]);
+        quint8 calcLrc = calculateLRC(frameWithoutLrc);
+        if (receivedLrc != calcLrc) {
             m_lastError = "Ошибка LRC";
             return false;
         }
 
-        // Извлекаем Function Code
+        // Function Code
         quint8 functionCode = static_cast<quint8>(frameWithoutLrc[1]);
 
-        // Проверяем код исключения
+        // Код исключения
         if (functionCode & 0x80) {
+            if (frameWithoutLrc.size() < 3) {
+                m_lastError = "Слишком короткий ответ с исключением";
+                return false;
+            }
             exceptionCode = static_cast<quint8>(frameWithoutLrc[2]);
             return true;
         }
 
-        // Проверяем, что функция совпадает
         if (functionCode != expectedFunction) {
             m_lastError = QString("Неверный код функции: ожидался %1, получен %2")
                           .arg(expectedFunction).arg(functionCode);
             return false;
         }
 
-        // Извлекаем данные
+        if (frameWithoutLrc.size() < 3) {
+            m_lastError = "Слишком короткий ответ";
+            return false;
+        }
         quint8 byteCount = static_cast<quint8>(frameWithoutLrc[2]);
         if (frameWithoutLrc.size() < 3 + byteCount) {
             m_lastError = "Недостаточно данных в ответе";
             return false;
         }
-
         data = frameWithoutLrc.mid(3, byteCount);
     }
-
     return true;
 }
 
 bool ModbusClient::waitForTcpData(int timeoutMs)
 {
-    QEventLoop loop;
-    connect(m_tcpSocket, &QTcpSocket::readyRead, &loop, &QEventLoop::quit);
-    QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
-    loop.exec();
+    QElapsedTimer timer;
+    timer.start();
 
-    if (!m_tcpSocket->bytesAvailable()) {
-        m_lastError = "Таймаут ожидания ответа";
-        return false;
+    while (timer.elapsed() < timeoutMs) {
+        if (m_tcpSocket->waitForReadyRead(100)) {
+            // Если уже есть хотя бы 7 байт MBAP — проверить длину
+            if (m_tcpSocket->bytesAvailable() >= 7) {
+                QByteArray peek = m_tcpSocket->peek(7);
+                quint16 len = (static_cast<quint8>(peek[4]) << 8)
+                              | static_cast<quint8>(peek[5]);
+                // MBAP (7) + PDU(len - 1) = 6 + len всего
+                int totalNeeded = 6 + len;
+                if (m_tcpSocket->bytesAvailable() >= totalNeeded) {
+                    return true;
+                }
+                // иначе — ждём ещё
+            } else {
+                return true;   // не Modbus TCP (ASCII через TCP) — отдаём что есть
+            }
+        }
     }
 
-    return true;
+    m_lastError = "Таймаут ожидания ответа (TCP)";
+    return false;
 }
 
 bool ModbusClient::waitForSerialData(int timeoutMs)
@@ -876,5 +892,53 @@ bool ModbusClient::waitForSerialData(int timeoutMs)
         return false;
     }
 
+    return true;
+}
+
+bool ModbusClient::connectAscii(const QString &portName, int baudRate,
+                                QSerialPort::DataBits dataBits,
+                                QSerialPort::Parity parity,
+                                QSerialPort::StopBits stopBits,
+                                int timeoutMs)
+{
+    QMutexLocker locker(&m_mutex);
+    Q_UNUSED(timeoutMs);
+
+    disconnect();
+    m_mode = Mode::ASCII;
+
+    m_serialPort->setPortName(portName);
+    m_serialPort->setBaudRate(baudRate);
+    m_serialPort->setDataBits(dataBits);
+    m_serialPort->setParity(parity);
+    m_serialPort->setStopBits(stopBits);
+
+    if (!m_serialPort->open(QIODevice::ReadWrite)) {
+        m_lastError = "Не удалось открыть COM-порт " + portName;
+        qWarning() << "[ModbusClient]" << m_lastError;
+        return false;
+    }
+
+    qDebug() << "[ModbusClient] Открыт COM-порт" << portName
+             << "скорость" << baudRate << "(ASCII)";
+    emit connected();
+    return true;
+}
+
+bool ModbusClient::connectAsciiTcp(const QString &ip, quint16 port, int timeoutMs)
+{
+    QMutexLocker locker(&m_mutex);
+
+    disconnect();
+    m_mode = Mode::ASCII;   // логика sendRequest для ASCII одинакова для TCP/COM
+
+    m_tcpSocket->connectToHost(ip, port);
+    if (!m_tcpSocket->waitForConnected(timeoutMs)) {
+        m_lastError = "Не удалось подключиться к " + ip + ":" + QString::number(port);
+        return false;
+    }
+
+    qDebug() << "[ModbusClient] Подключено к" << ip << ":" << port << "(ASCII/TCP)";
+    emit connected();
     return true;
 }
